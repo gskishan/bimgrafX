@@ -2,7 +2,7 @@
 {% block title %} {{ _("Job Openings") }} {% endblock title %}
 
 {% block header %}
-<h3 class="mt-0 mb-10 jobs-page">{{ _("Job Openingssss") }}</h3>
+<h3 class="mt-0 mb-10 jobs-page">{{ _("Job Openings") }}</h3>
 {% endblock header %}
 
 {% block page_content %}
@@ -22,7 +22,8 @@
 		<hr class="mb-6" />
 
 		{% for name, values in all_filters.items() %}
-		<div class="mb-6">
+		<div class="mb-6 {% if name.title() == 'Company' %}d-none{% endif %}">
+
 			<p class="font-weight-bold mb-4">
 				{{ name.title() | replace('_', ' ') }}
 			</p>
@@ -319,7 +320,8 @@
 
 		<div class="px-6 pt-6 flex-grow-1 overflow-auto">
 			{% for name, values in all_filters.items() %}
-			<div class="mb-6">
+			<div class="mb-6 {% if name.title() == 'Company' %}d-none{% endif %}">
+
 				<p class="font-weight-bold mb-4">
 					{{ name.title() | replace('_', ' ') }}
 				</p>

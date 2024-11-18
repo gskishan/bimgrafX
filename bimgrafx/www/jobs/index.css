@@ -33,6 +33,9 @@ h4.jobs-page {
 .text-12 {
 	font-size: 12px;
 }
+.d-none {
+    display: none;
+}
 
 .full-time-badge {
 	background: var(--bg-green);
