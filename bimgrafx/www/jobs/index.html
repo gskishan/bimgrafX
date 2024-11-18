@@ -17,12 +17,13 @@
 	<div class="col-3 text-15 d-none d-lg-block">
 		<div class="flex align-items-center">
 			<p class="text-18 font-weight-bold mb-0">{{ _("Filters") }}</p>
-			<a name="clear-filters" class="ml-auto" role="button">{{ _("Clear All") }}</a>
+			<a name="clear-filters" class="ml-auto {% if frappe.session.user != 'Administrator' %}d-none{% endif %}" role="button">Clear All</a>
 		</div>
 		<hr class="mb-6" />
 
 		{% for name, values in all_filters.items() %}
-		<div class="mb-6 {% if name.title() == 'Company' %}d-none{% endif %}">
+		<div class="mb-6 {% if name.title() == 'Company' and frappe.session.user != 'Administrator' %}d-none{% endif %}">
+    
 
 			<p class="font-weight-bold mb-4">
 				{{ name.title() | replace('_', ' ') }}
@@ -320,7 +321,8 @@
 
 		<div class="px-6 pt-6 flex-grow-1 overflow-auto">
 			{% for name, values in all_filters.items() %}
-			<div class="mb-6 {% if name.title() == 'Company' %}d-none{% endif %}">
+			<div class="mb-6 {% if name.title() == 'Company' and frappe.session.user != 'Administrator' %}d-none{% endif %}">
+
 
 				<p class="font-weight-bold mb-4">
 					{{ name.title() | replace('_', ' ') }}
@@ -350,7 +352,7 @@
 		</div>
 
 		<div class="flex align-items-center py-4 border-top">
-			<a name="clear-filters" class="text-17 text-center w-50 mx-6" role="button">{{ _("Clear All") }}</a>
+			<a name="clear-filters" class="text-17 text-center w-50 mx-6 {% if frappe.session.user != 'Administrator' %}d-none{% endif %}" " role="button">{{ _("Clear All") }}</a>
 			<a id="apply-filters" class="btn btn-primary btn-lg w-50 mx-6">{{ _("Apply") }}</a>
 		</div>
 	</div>
