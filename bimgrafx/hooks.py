@@ -11,7 +11,7 @@ app_license = "mit"
 
 # include js, css files in header of desk.html
 # app_include_css = "/assets/bimgrafx/css/bimgrafx.css"
-# app_include_js = "/assets/bimgrafx/js/bimgrafx.js"
+app_include_js = "/assets/bimgrafx/js/common_script.js"
 
 # include js, css files in header of web template
 # web_include_css = "/assets/bimgrafx/css/bimgrafx.css"
