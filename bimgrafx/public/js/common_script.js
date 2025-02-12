@@ -24,7 +24,7 @@ $(document).ready(function () {
                 }
 
                 const helloText = `
-                    <div class="hello-text" style="background-color: #ffffff; color: #a88428; font-size: 12px; font-weight: bold; padding: 5px 10px; margin-bottom: 10px; border: 2px solid #152a36; border-radius: 5px; display: inline-block;">
+                    <div class="hello-text" style="background-color: #ffffff; color: #000000; font-size: 12px; font-weight: bold; padding: 8px 8px; margin-bottom: 10px; border: 2px solid #152a36; border-radius: 5px; display: inline-block;">
                         Company: ${company}<br>Last Login: ${lastLogin}
                     </div>
                 `;
