@@ -13,7 +13,7 @@ $(document).ready(function () {
                 const lastLogin = r.message?.last_login || "Never";
 
                 const helloText = `
-                    <div class="hello-text" style="background-color: #ffffff; color: #333; font-size: 14px; font-weight: bold; padding: 5px 10px; margin-bottom: 10px; border-left: 2px solid #ccb064; border-radius: 5px; display: inline-block;">
+                    <div class="hello-text" style="background-color: #ffffff; color: #a88428; font-size: 12px; font-weight: bold; padding: 5px 10px; margin-bottom: 10px; border: 2px solid #152a36; border-radius: 5px; display: inline-block;">
                         Company: ${company}<br>Last Login: ${lastLogin}
                     </div>
                 `;
