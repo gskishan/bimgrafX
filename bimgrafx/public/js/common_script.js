@@ -20,7 +20,7 @@ $(document).ready(function () {
                     let hours = String(loginDate.getHours()).padStart(2, "0");
                     let minutes = String(loginDate.getMinutes()).padStart(2, "0");
 
-                    lastLogin = `${day}:${month}:${year} ${hours}:${minutes}`;
+                    lastLogin = `${day}-${month}-${year} ${hours}:${minutes}`;
                 }
 
                 const helloText = `
