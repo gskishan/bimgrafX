@@ -24,8 +24,8 @@ $(document).ready(function () {
                 }
 
                 const helloText = `
-                    <div class="hello-text" style="background-color: #ffffff; color: #000000; font-size: 12px; font-weight: bold; padding: 8px 8px; margin-bottom: 10px; border: 2px solid #152a36; border-radius: 5px; display: inline-block;">
-                        Company: ${company}<br>Last Login: ${lastLogin}
+                    <div class="hello-text" style="background-color: #ffffff; color: #000000; font-size: 12px; font-weight: bold; padding: 5px 8px; margin: 10px; border: 1px solid #152a36; border-radius: 10px; display: inline-block;">
+                        Company: ${company}<br><i class="fa fa-clock-o" aria-hidden="true"></i> Last Active: ${lastLogin}
                     </div>
                 `;
                 $('.search-bar').before(helloText);
