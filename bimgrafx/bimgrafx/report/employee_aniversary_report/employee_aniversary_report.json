@@ -10,7 +10,7 @@
  "modified": "2017-02-24 20:18:13.011024", 
  "modified_by": "Administrator", 
  "module": "HR", 
- "name": "Employee Birthday", 
+ "name": "Employee Anniversary", 
  "owner": "Administrator", 
  "ref_doctype": "Employee", 
  "report_name": "Employee Anniversary", 
