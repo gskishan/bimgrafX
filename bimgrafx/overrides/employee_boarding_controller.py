@@ -13,6 +13,9 @@ class CustomEmployeeBoardingController(EmployeeBoardingController):
 	        else:
 	            project_name += self.employee
 	
+	        # Generate a default Project Code if not provided
+	        project_code = f"PRJ-{frappe.generate_hash(length=8)}"
+	
 	        project = frappe.get_doc(
 	            {
 	                "doctype": "Project",
@@ -22,6 +25,7 @@ class CustomEmployeeBoardingController(EmployeeBoardingController):
 	                else self.resignation_letter_date,
 	                "department": self.department,
 	                "company": self.company,
+	                "project_code": project_code,  # Set the Project Code here
 	            }
 	        ).insert(ignore_permissions=True, ignore_mandatory=True)
 	
