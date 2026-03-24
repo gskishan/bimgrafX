@@ -118,6 +118,10 @@ app_include_js = "/assets/bimgrafx/js/common_script.js"
 # 	"ToDo": "custom_app.overrides.CustomToDo"
 # }
 
+override_doctype_class = {
+    "Employee Onboarding": "bimgrafx.overrides.employee_boarding_controller.CustomEmployeeBoardingController"
+}
+
 # Document Events
 # ---------------
 # Hook on document methods and events
