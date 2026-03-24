@@ -109,7 +109,12 @@ class CustomEmployeeBoardingController(EmployeeBoardingController):
                 if project.holiday_list:
                     return project.holiday_list
                 else:
-                    frappe.throw(_("The linked Project does not have a Holiday List set."), frappe.MandatoryError)
+                    # Use a default Holiday List if none is set in the Project
+                    default_holiday_list = frappe.db.get_single_value("HR Settings", "default_holiday_list")
+                    if default_holiday_list:
+                        return default_holiday_list
+                    else:
+                        frappe.throw(_("The linked Project does not have a Holiday List set, and no default Holiday List is configured."), frappe.MandatoryError)
             else:
                 frappe.throw(_("Please link a Project with a Holiday List to the Employee Onboarding document."), frappe.MandatoryError)
 
