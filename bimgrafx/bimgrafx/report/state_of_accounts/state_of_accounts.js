@@ -19,15 +19,14 @@ frappe.query_reports["State of Accounts"] = {
             "reqd": 0,
             "get_query": function () {
                 var company = frappe.query_report.get_filter_value("company");
-
                 if (company) {
                     return {
-                        query: "erpnext.controllers.queries.customer_query",
                         filters: {
-                            company: company
+                            "default_company": company
                         }
                     };
                 }
+                return {};
             }
         },
         {
