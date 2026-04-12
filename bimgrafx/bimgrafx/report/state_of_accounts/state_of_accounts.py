@@ -1,5 +1,5 @@
 import frappe
-from frappe.utils import flt
+from frappe.utils import flt, date_diff, today
 
 
 def execute(filters=None):
@@ -33,6 +33,12 @@ def get_columns():
             "width": 140,
         },
         {
+            "label": "Posting Date",
+            "fieldname": "posting_date",
+            "fieldtype": "Date",
+            "width": 110,
+        },
+        {
             "label": "Invoice Value",
             "fieldname": "invoice_value",
             "fieldtype": "Currency",
@@ -45,10 +51,10 @@ def get_columns():
             "width": 170,
         },
         {
-            "label": "Posting Date",
-            "fieldname": "posting_date",
-            "fieldtype": "Date",
-            "width": 110,
+            "label": "Ageing (Days)",
+            "fieldname": "ageing_days",
+            "fieldtype": "Int",
+            "width": 120,
         },
     ]
 
@@ -85,12 +91,13 @@ def get_data(filters):
     data = []
     for inv in invoices:
         data.append({
-            "name": inv.name,
-            "customer": inv.customer,
-            "company": inv.company,
-            "invoice_value": flt(inv.grand_total),
+            "name":               inv.name,
+            "customer":           inv.customer,
+            "company":            inv.company,
+            "posting_date":       inv.posting_date,
+            "invoice_value":      flt(inv.grand_total),
             "outstanding_amount": flt(inv.outstanding_amount),
-            "posting_date": inv.posting_date,
+            "ageing_days":        date_diff(today(), inv.posting_date),
         })
 
     return data
