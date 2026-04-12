@@ -1,49 +1,24 @@
 {
-  "add_total_row": 1,
-  "columns": [],
-  "disabled": 0,
-  "docstatus": 0,
-  "doctype": "Report",
-  "filters": [
-    {
-      "fieldname": "company",
-      "fieldtype": "Link",
-      "label": "Company",
-      "mandatory": 1,
-      "options": "Company"
-    },
-    {
-      "fieldname": "customer",
-      "fieldtype": "Link",
-      "label": "Customer",
-      "mandatory": 0,
-      "options": "Customer"
-    },
-    {
-      "fieldname": "start_date",
-      "fieldtype": "Date",
-      "label": "From Date",
-      "mandatory": 1
-    },
-    {
-      "fieldname": "end_date",
-      "fieldtype": "Date",
-      "label": "To Date",
-      "mandatory": 1
-    }
-  ],
-  "idx": 0,
-  "is_standard": "Yes",
-  "letterhead": null,
-  "module": "Accounts",
-  "name": "State of Accounts",
-  "prepared_report": 0,
-  "ref_doctype": "Sales Invoice",
-  "report_name": "State of Accounts",
-  "report_type": "Script Report",
-  "roles": [
-    { "role": "Accounts User" },
-    { "role": "Accounts Manager" },
-    { "role": "System Manager" }
-  ]
+ "add_total_row": 0,
+ "columns": [],
+ "creation": "2025-03-04 00:00:00.000000",
+ "disabled": 0,
+ "docstatus": 0,
+ "doctype": "Report",
+ "filters": [],
+ "idx": 0,
+ "is_standard": "Yes",
+ "letter_head": "BG_Letterhead_India",
+ "letterhead": null,
+ "modified": "2025-03-04 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Bimgrafx",
+ "name": "State of Accounts",
+ "owner": "Administrator",
+ "prepared_report": 0,
+ "ref_doctype": "Sales Invoice",
+ "report_name": "State of Accounts",
+ "report_type": "Script Report",
+ "roles": [],
+ "timeout": 0
 }
