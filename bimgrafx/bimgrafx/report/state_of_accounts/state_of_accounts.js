@@ -19,14 +19,23 @@ frappe.query_reports["State of Accounts"] = {
             "reqd": 0,
             "get_query": function () {
                 var company = frappe.query_report.get_filter_value("company");
-                if (company) {
-                    return {
-                        filters: {
-                            "default_company": company
-                        }
-                    };
-                }
-                return {};
+                if (!company) return {};
+
+                // Fetch customers who have invoices under this company
+                // Uses frappe.db.get_list which is safe and whitelisted in v15
+                return new Promise(function (resolve) {
+                    frappe.db.get_list("Sales Invoice", {
+                        filters: { company: company, docstatus: 1 },
+                        fields: ["customer"],
+                        limit: 500,
+                        group_by: "customer"
+                    }).then(function (rows) {
+                        var names = [...new Set(rows.map(r => r.customer))];
+                        resolve({
+                            filters: [["Customer", "name", "in", names]]
+                        });
+                    });
+                });
             }
         },
         {
