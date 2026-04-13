@@ -65,9 +65,21 @@ def append_vat_on_sales(data, filters):
 		frappe.format(get_reverse_charge_tax(filters), "Currency"),
 	)
 
-	append_data(data, "4", _("Zero Rated"), frappe.format(get_zero_rated_total(filters), "Currency"), "-")
+	append_data(
+		data,
+		"4",
+		_("Zero Rated"),
+		frappe.format(get_zero_rated_total(filters), "Currency"),
+		"-",
+	)
 
-	append_data(data, "5", _("Exempt Supplies"), frappe.format(get_exempt_total(filters), "Currency"), "-")
+	append_data(
+		data,
+		"5",
+		_("Exempt Supplies"),
+		frappe.format(get_exempt_total(filters), "Currency"),
+		"-",
+	)
 
 	append_data(data, "", "", "", "")
 
@@ -79,14 +91,17 @@ def standard_rated_expenses_emiratewise(data, filters):
 	total_emiratewise = get_total_emiratewise(filters)
 	emirates = get_emirates()
 	amounts_by_emirate = {}
-	for emirate, amount, vat in total_emiratewise:
-		amounts_by_emirate[emirate] = {
-			"legend": emirate,
-			"raw_amount": amount,
-			"raw_vat_amount": vat,
-			"amount": frappe.format(amount, "Currency"),
-			"vat_amount": frappe.format(vat, "Currency"),
-		}
+
+	if total_emiratewise:
+		for emirate, amount, vat in total_emiratewise:
+			amounts_by_emirate[emirate] = {
+				"legend": emirate,
+				"raw_amount": amount,
+				"raw_vat_amount": vat,
+				"amount": frappe.format(amount, "Currency"),
+				"vat_amount": frappe.format(vat, "Currency"),
+			}
+
 	amounts_by_emirate = append_emiratewise_expenses(data, emirates, amounts_by_emirate)
 	return emirates, amounts_by_emirate
 
@@ -139,278 +154,301 @@ def get_total_emiratewise(filters):
 	try:
 		return frappe.db.sql(
 			f"""
-			select
-				s.vat_emirate as emirate, sum(i.base_net_amount) as total, sum(i.tax_amount)
-			from
-				`tabSales Invoice Item` i inner join `tabSales Invoice` s
-			on
-				i.parent = s.name
-			where
-				s.docstatus = 1 and i.is_exempt != 1 and i.is_zero_rated != 1
+			SELECT
+				s.vat_emirate AS emirate,
+				SUM(i.base_net_amount) AS total,
+				SUM(i.tax_amount) AS tax_total
+			FROM
+				`tabSales Invoice Item` i
+				INNER JOIN `tabSales Invoice` s ON i.parent = s.name
+			WHERE
+				s.docstatus = 1
+				AND i.is_exempt != 1
+				AND i.is_zero_rated != 1
 				{conditions}
-			group by
-				s.vat_emirate;
+			GROUP BY
+				s.vat_emirate
 			""",
 			filters,
 		)
 	except (IndexError, TypeError):
-		return 0
+		return []
 
 
 def get_emirates():
 	"""Returns a List of emirates in the order that they are to be displayed."""
-	return ["Abu Dhabi", "Dubai", "Sharjah", "Ajman", "Umm Al Quwain", "Ras Al Khaimah", "Fujairah"]
+	return [
+		"Abu Dhabi",
+		"Dubai",
+		"Sharjah",
+		"Ajman",
+		"Umm Al Quwain",
+		"Ras Al Khaimah",
+		"Fujairah",
+	]
 
 
 def get_filters(filters):
-	"""The conditions to be used to filter data to calculate the total sale."""
+	"""Build list-style query filters."""
 	query_filters = []
 	if filters.get("company"):
 		query_filters.append(["company", "=", filters["company"]])
 	if filters.get("from_date"):
 		query_filters.append(["posting_date", ">=", filters["from_date"]])
-	if filters.get("from_date"):
+	if filters.get("to_date"):
 		query_filters.append(["posting_date", "<=", filters["to_date"]])
 	return query_filters
 
 
+# ---------------------------------------------------------------------------
+# Reverse Charge
+# ---------------------------------------------------------------------------
+
 def get_reverse_charge_total(filters):
-	"""Returns the sum of the total of each Purchase invoice made."""
+	"""Returns the sum of base_total for reverse charge Purchase Invoices."""
 	query_filters = get_filters(filters)
 	query_filters.append(["reverse_charge", "=", "Y"])
 	query_filters.append(["docstatus", "=", 1])
 	try:
-		return (
-			frappe.db.get_all(
-				"Purchase Invoice",
-				filters=query_filters,
-				fields=[{"SUM": "base_total"}],
-				as_list=True,
-				limit=1,
-			)[0][0]
-			or 0
+		result = frappe.db.get_all(
+			"Purchase Invoice",
+			filters=query_filters,
+			fields=["SUM(base_total) as total"],
+			as_list=True,
+			limit=1,
 		)
+		return result[0][0] or 0
 	except (IndexError, TypeError):
 		return 0
 
 
 def get_reverse_charge_tax(filters):
-	"""Returns the sum of the tax of each Purchase invoice made."""
+	"""Returns the sum of VAT debit for reverse charge Purchase Invoices."""
 	conditions = get_conditions_join(filters)
-	return (
-		frappe.db.sql(
+	try:
+		result = frappe.db.sql(
 			f"""
-		select sum(debit)  from
-			`tabPurchase Invoice` p inner join `tabGL Entry` gl
-		on
-			gl.voucher_no =  p.name
-		where
-			p.reverse_charge = "Y"
-			and p.docstatus = 1
-			and gl.docstatus = 1
-			and account in (select account from `tabUAE VAT Account` where  parent=%(company)s)
-			{conditions} ;
-		""",
+			SELECT SUM(gl.debit)
+			FROM
+				`tabPurchase Invoice` p
+				INNER JOIN `tabGL Entry` gl ON gl.voucher_no = p.name
+			WHERE
+				p.reverse_charge = 'Y'
+				AND p.docstatus = 1
+				AND gl.docstatus = 1
+				AND gl.is_cancelled = 0
+				AND gl.account IN (
+					SELECT account FROM `tabUAE VAT Account` WHERE parent = %(company)s
+				)
+				{conditions}
+			""",
 			filters,
-		)[0][0]
-		or 0
-	)
+		)
+		return result[0][0] or 0
+	except (IndexError, TypeError):
+		return 0
 
 
 def get_reverse_charge_recoverable_total(filters):
-	"""Returns the sum of the total of each Purchase invoice made with recoverable reverse charge."""
+	"""Returns base_total for recoverable reverse charge Purchase Invoices."""
 	query_filters = get_filters(filters)
 	query_filters.append(["reverse_charge", "=", "Y"])
-	query_filters.append(["recoverable_reverse_charge", ">", "0"])
+	query_filters.append(["recoverable_reverse_charge", ">", 0])
 	query_filters.append(["docstatus", "=", 1])
 	try:
-		return (
-			frappe.db.get_all(
-				"Purchase Invoice",
-				filters=query_filters,
-				fields=[{"SUM": "base_total"}],
-				as_list=True,
-				limit=1,
-			)[0][0]
-			or 0
+		result = frappe.db.get_all(
+			"Purchase Invoice",
+			filters=query_filters,
+			fields=["SUM(base_total) as total"],
+			as_list=True,
+			limit=1,
 		)
+		return result[0][0] or 0
 	except (IndexError, TypeError):
 		return 0
 
 
 def get_reverse_charge_recoverable_tax(filters):
-	"""Returns the sum of the tax of each Purchase invoice made."""
+	"""Returns recoverable VAT for reverse charge Purchase Invoices."""
 	conditions = get_conditions_join(filters)
-	return (
-		frappe.db.sql(
+	try:
+		result = frappe.db.sql(
 			f"""
-		select
-			sum(debit * p.recoverable_reverse_charge / 100)
-		from
-			`tabPurchase Invoice` p  inner join `tabGL Entry` gl
-		on
-			gl.voucher_no = p.name
-		where
-			p.reverse_charge = "Y"
-			and p.docstatus = 1
-			and p.recoverable_reverse_charge > 0
-			and gl.docstatus = 1
-			and account in (select account from `tabUAE VAT Account` where  parent=%(company)s)
-			{conditions} ;
-		""",
+			SELECT SUM(gl.debit * p.recoverable_reverse_charge / 100)
+			FROM
+				`tabPurchase Invoice` p
+				INNER JOIN `tabGL Entry` gl ON gl.voucher_no = p.name
+			WHERE
+				p.reverse_charge = 'Y'
+				AND p.docstatus = 1
+				AND p.recoverable_reverse_charge > 0
+				AND gl.docstatus = 1
+				AND gl.is_cancelled = 0
+				AND gl.account IN (
+					SELECT account FROM `tabUAE VAT Account` WHERE parent = %(company)s
+				)
+				{conditions}
+			""",
 			filters,
-		)[0][0]
-		or 0
-	)
+		)
+		return result[0][0] or 0
+	except (IndexError, TypeError):
+		return 0
 
 
-def get_conditions_join(filters):
-	"""The conditions to be used to filter data to calculate the total vat."""
-	conditions = ""
-	for opts in (
-		("company", " and p.company=%(company)s"),
-		("from_date", " and p.posting_date>=%(from_date)s"),
-		("to_date", " and p.posting_date<=%(to_date)s"),
-	):
-		if filters.get(opts[0]):
-			conditions += opts[1]
-	return conditions
-
+# ---------------------------------------------------------------------------
+# Standard Rated Expenses
+# ---------------------------------------------------------------------------
 
 def get_standard_rated_expenses_total(filters):
-	"""Returns the sum of the total of each Purchase invoice made with recoverable reverse charge."""
+	"""Returns base_total for Purchase Invoices with recoverable standard rated expenses."""
 	query_filters = get_filters(filters)
 	query_filters.append(["recoverable_standard_rated_expenses", ">", 0])
 	query_filters.append(["docstatus", "=", 1])
 	try:
-		return (
-			frappe.db.get_all(
-				"Purchase Invoice",
-				filters=query_filters,
-				fields=[{"SUM": "base_total"}],
-				as_list=True,
-				limit=1,
-			)[0][0]
-			or 0
+		result = frappe.db.get_all(
+			"Purchase Invoice",
+			filters=query_filters,
+			fields=["SUM(base_total) as total"],
+			as_list=True,
+			limit=1,
 		)
+		return result[0][0] or 0
 	except (IndexError, TypeError):
 		return 0
 
 
 def get_standard_rated_expenses_tax(filters):
-	"""Returns the sum of the tax of each Purchase invoice made."""
+	"""Returns recoverable standard rated expenses tax total."""
 	query_filters = get_filters(filters)
 	query_filters.append(["recoverable_standard_rated_expenses", ">", 0])
 	query_filters.append(["docstatus", "=", 1])
 	try:
-		return (
-			frappe.db.get_all(
-				"Purchase Invoice",
-				filters=query_filters,
-				fields=[{"SUM": "recoverable_standard_rated_expenses"}],
-				as_list=True,
-				limit=1,
-			)[0][0]
-			or 0
+		result = frappe.db.get_all(
+			"Purchase Invoice",
+			filters=query_filters,
+			fields=["SUM(recoverable_standard_rated_expenses) as total"],
+			as_list=True,
+			limit=1,
 		)
+		return result[0][0] or 0
 	except (IndexError, TypeError):
 		return 0
 
 
+# ---------------------------------------------------------------------------
+# Tourist Tax Return
+# ---------------------------------------------------------------------------
+
 def get_tourist_tax_return_total(filters):
-	"""Returns the sum of the total of each Sales invoice with non zero tourist_tax_return."""
+	"""Returns base_total for Sales Invoices with tourist tax return."""
 	query_filters = get_filters(filters)
 	query_filters.append(["tourist_tax_return", ">", 0])
 	query_filters.append(["docstatus", "=", 1])
 	try:
-		return (
-			frappe.db.get_all(
-				"Sales Invoice", filters=query_filters, fields=[{"SUM": "base_total"}], as_list=True, limit=1
-			)[0][0]
-			or 0
+		result = frappe.db.get_all(
+			"Sales Invoice",
+			filters=query_filters,
+			fields=["SUM(base_total) as total"],
+			as_list=True,
+			limit=1,
 		)
+		return result[0][0] or 0
 	except (IndexError, TypeError):
 		return 0
 
 
 def get_tourist_tax_return_tax(filters):
-	"""Returns the sum of the tax of each Sales invoice with non zero tourist_tax_return."""
+	"""Returns tourist tax return total for Sales Invoices."""
 	query_filters = get_filters(filters)
 	query_filters.append(["tourist_tax_return", ">", 0])
 	query_filters.append(["docstatus", "=", 1])
 	try:
-		return (
-			frappe.db.get_all(
-				"Sales Invoice",
-				filters=query_filters,
-				fields=[{"SUM": "tourist_tax_return"}],
-				as_list=True,
-				limit=1,
-			)[0][0]
-			or 0
+		result = frappe.db.get_all(
+			"Sales Invoice",
+			filters=query_filters,
+			fields=["SUM(tourist_tax_return) as total"],
+			as_list=True,
+			limit=1,
 		)
+		return result[0][0] or 0
 	except (IndexError, TypeError):
 		return 0
 
 
+# ---------------------------------------------------------------------------
+# Zero Rated & Exempt
+# ---------------------------------------------------------------------------
+
 def get_zero_rated_total(filters):
-	"""Returns the sum of each Sales Invoice Item Amount which is zero rated."""
+	"""Returns the sum of base_net_amount for zero rated Sales Invoice Items."""
 	conditions = get_conditions(filters)
 	try:
-		return (
-			frappe.db.sql(
-				f"""
-			select
-				sum(i.base_net_amount) as total
-			from
-				`tabSales Invoice Item` i inner join `tabSales Invoice` s
-			on
-				i.parent = s.name
-			where
-				s.docstatus = 1 and  i.is_zero_rated = 1
-				{conditions} ;
+		result = frappe.db.sql(
+			f"""
+			SELECT SUM(i.base_net_amount) AS total
+			FROM
+				`tabSales Invoice Item` i
+				INNER JOIN `tabSales Invoice` s ON i.parent = s.name
+			WHERE
+				s.docstatus = 1
+				AND i.is_zero_rated = 1
+				{conditions}
 			""",
-				filters,
-			)[0][0]
-			or 0
+			filters,
 		)
+		return result[0][0] or 0
 	except (IndexError, TypeError):
 		return 0
 
 
 def get_exempt_total(filters):
-	"""Returns the sum of each Sales Invoice Item Amount which is Vat Exempt."""
+	"""Returns the sum of base_net_amount for exempt Sales Invoice Items."""
 	conditions = get_conditions(filters)
 	try:
-		return (
-			frappe.db.sql(
-				f"""
-			select
-				sum(i.base_net_amount) as total
-			from
-				`tabSales Invoice Item` i inner join `tabSales Invoice` s
-			on
-				i.parent = s.name
-			where
-				s.docstatus = 1 and  i.is_exempt = 1
-				{conditions} ;
+		result = frappe.db.sql(
+			f"""
+			SELECT SUM(i.base_net_amount) AS total
+			FROM
+				`tabSales Invoice Item` i
+				INNER JOIN `tabSales Invoice` s ON i.parent = s.name
+			WHERE
+				s.docstatus = 1
+				AND i.is_exempt = 1
+				{conditions}
 			""",
-				filters,
-			)[0][0]
-			or 0
+			filters,
 		)
+		return result[0][0] or 0
 	except (IndexError, TypeError):
 		return 0
 
 
+# ---------------------------------------------------------------------------
+# Condition Builders
+# ---------------------------------------------------------------------------
+
 def get_conditions(filters):
-	"""The conditions to be used to filter data to calculate the total sale."""
+	"""SQL conditions for Sales Invoice queries (uses s alias)."""
 	conditions = ""
-	for opts in (
-		("company", " and s.company=%(company)s"),
-		("from_date", " and s.posting_date>=%(from_date)s"),
-		("to_date", " and s.posting_date<=%(to_date)s"),
+	for key, condition in (
+		("company", " AND s.company = %(company)s"),
+		("from_date", " AND s.posting_date >= %(from_date)s"),
+		("to_date", " AND s.posting_date <= %(to_date)s"),
 	):
-		if filters.get(opts[0]):
-			conditions += opts[1]
+		if filters.get(key):
+			conditions += condition
+	return conditions
+
+
+def get_conditions_join(filters):
+	"""SQL conditions for Purchase Invoice join queries (uses p alias)."""
+	conditions = ""
+	for key, condition in (
+		("company", " AND p.company = %(company)s"),
+		("from_date", " AND p.posting_date >= %(from_date)s"),
+		("to_date", " AND p.posting_date <= %(to_date)s"),
+	):
+		if filters.get(key):
+			conditions += condition
 	return conditions
