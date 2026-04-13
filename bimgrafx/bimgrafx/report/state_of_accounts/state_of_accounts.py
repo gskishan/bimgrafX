@@ -54,6 +54,13 @@ def get_columns():
             "width": 150,
         },
         {
+            "label": "Paid Amount",
+            "fieldname": "paid_amount",
+            "fieldtype": "Currency",
+            "options": "currency",
+            "width": 150,
+        },
+        {
             "label": "Outstanding Amount",
             "fieldname": "outstanding_amount",
             "fieldtype": "Currency",
@@ -65,6 +72,19 @@ def get_columns():
             "fieldname": "payment_status",
             "fieldtype": "Data",
             "width": 130,
+        },
+        {
+            "label": "Payment Entry",
+            "fieldname": "payment_entry",
+            "fieldtype": "Link",
+            "options": "Payment Entry",
+            "width": 160,
+        },
+        {
+            "label": "Payment Date",
+            "fieldname": "payment_date",
+            "fieldtype": "Date",
+            "width": 120,
         },
         {
             "label": "Ageing (Days)",
@@ -96,11 +116,27 @@ def get_data(filters):
             si.grand_total,
             si.outstanding_amount,
             si.posting_date,
-            si.status,
-            c.default_currency AS currency
+            c.default_currency          AS currency,
+            GROUP_CONCAT(
+                pe.name
+                ORDER BY pe.posting_date
+                SEPARATOR ', '
+            )                           AS payment_entry,
+            MAX(pe.posting_date)        AS payment_date,
+            SUM(
+                IFNULL(per.allocated_amount, 0)
+            )                           AS paid_amount
         FROM `tabSales Invoice` si
-        LEFT JOIN `tabCompany` c ON c.name = si.company
+        LEFT JOIN `tabCompany` c
+            ON c.name = si.company
+        LEFT JOIN `tabPayment Entry Reference` per
+            ON per.reference_name = si.name
+            AND per.reference_doctype = 'Sales Invoice'
+        LEFT JOIN `tabPayment Entry` pe
+            ON pe.name = per.parent
+            AND pe.docstatus = 1
         WHERE {conditions}
+        GROUP BY si.name
         ORDER BY si.posting_date DESC
         """,
         filters,
@@ -110,16 +146,17 @@ def get_data(filters):
     data = []
     for inv in invoices:
         outstanding = flt(inv.outstanding_amount)
+        paid_amount = flt(inv.paid_amount)
 
-        # Payment status derived from outstanding amount
+        # Payment status
         if outstanding <= 0:
             payment_status = "Paid"
-        elif outstanding < flt(inv.grand_total):
+        elif paid_amount > 0:
             payment_status = "Partly Paid"
         else:
             payment_status = "Unpaid"
 
-        # Ageing only applies to invoices with outstanding amount
+        # Ageing only for invoices with outstanding balance
         ageing_days = date_diff(today(), inv.posting_date) if outstanding > 0 else 0
 
         data.append({
@@ -129,8 +166,11 @@ def get_data(filters):
             "posting_date":       inv.posting_date,
             "currency":           inv.currency,
             "invoice_value":      flt(inv.grand_total),
+            "paid_amount":        paid_amount,
             "outstanding_amount": outstanding,
             "payment_status":     payment_status,
+            "payment_entry":      inv.payment_entry or "",
+            "payment_date":       inv.payment_date or "",
             "ageing_days":        ageing_days,
         })
 
