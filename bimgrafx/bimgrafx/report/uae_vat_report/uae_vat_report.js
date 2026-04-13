@@ -1,4 +1,4 @@
-frappe.query_reports["UAE VAT 201"] = {
+frappe.query_reports["UAE VAT Report"] = {
 	filters: [
 		{
 			fieldname: "company",
