@@ -41,6 +41,7 @@ def execute(filters=None):
 		filters=filters,
 		accumulated_values=filters.accumulated_values,
 		ignore_closing_entries=True,
+		accounting_method=filters.get("accounting_method","Accrual"),
 	)
 
 	expense = get_data(
@@ -51,6 +52,7 @@ def execute(filters=None):
 		filters=filters,
 		accumulated_values=filters.accumulated_values,
 		ignore_closing_entries=True,
+		accounting_method=filters.get("accounting_method","Accrual"),
 	)
 
 	net_profit_loss = get_net_profit_loss(
