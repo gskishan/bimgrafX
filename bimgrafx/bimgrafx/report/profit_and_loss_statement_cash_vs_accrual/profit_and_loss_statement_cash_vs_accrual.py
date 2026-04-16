@@ -1,20 +1,14 @@
-# Copyright (c) 2015, Frappe Technologies Pvt. Ltd. and Contributors
-# License: GNU General Public License v3. See license.txt
-
 import frappe
 from frappe import _
 from frappe.utils import flt
+from frappe.utils.nestedset import ExistsCriterion
 
-from erpnext.accounts.doctype.financial_report_template.financial_report_engine import (
-    FinancialReportEngine,
-)
 from erpnext.accounts.report.financial_statements import (
     compute_growth_view_data,
     compute_margin_view_data,
     get_columns,
     get_filtered_list_for_consolidated_report,
     get_period_list,
-    # ✅ DO NOT import get_data from core — we define our own below
     get_accounts,
     filter_accounts,
     get_appropriate_currency,
@@ -29,14 +23,13 @@ from erpnext.accounts.report.financial_statements import (
     convert_to_presentation_currency,
     get_currency,
 )
-from frappe.utils.nestedset import ExistsCriterion
 
 
 def _set_gl_entries_cash(
     company, from_date, to_date, filters, gl_entries_by_account,
     root_lft, root_rgt, root_type=None, ignore_closing_entries=False,
 ):
-    """Same as core set_gl_entries_by_account but only Payment Entry / Journal Entry."""
+    """Restricted to Payment Entry and Journal Entry only (Cash basis)."""
     gl = frappe.qb.DocType("GL Entry")
     query = (
         frappe.qb.from_(gl)
@@ -48,7 +41,7 @@ def _set_gl_entries_cash(
         .where(gl.company == filters.company)
         .where(gl.is_cancelled == 0)
         .where(gl.posting_date <= to_date)
-        .where(gl.voucher_type.isin(["Payment Entry", "Journal Entry"]))  # ✅ Cash-basis
+        .where(gl.voucher_type.isin(["Payment Entry", "Journal Entry"]))
         .force_index("posting_date_company_index")
     )
 
@@ -85,8 +78,8 @@ def get_data(
         return None
 
     accounts, accounts_by_name, parent_children_map = filter_accounts(accounts)
-
     gl_entries_by_account = {}
+
     for root in frappe.db.sql(
         "SELECT lft, rgt FROM tabAccount WHERE root_type=%s AND ifnull(parent_account,'')=''",
         root_type, as_dict=1,
@@ -131,9 +124,6 @@ def get_data(
 
 
 def execute(filters=None):
-    if filters and filters.report_template:
-        return FinancialReportEngine().execute(filters)
-
     period_list = get_period_list(
         filters.from_fiscal_year, filters.to_fiscal_year,
         filters.period_start_date, filters.period_end_date,
@@ -180,8 +170,6 @@ def execute(filters=None):
 
     return columns, data, None, chart, report_summary, primitive_summary
 
-
-# ── kept identical to core ─────────────────────────────────────────────────
 
 def get_report_summary(
     period_list, periodicity, income, expense, net_profit_loss, currency, filters, consolidated=False
@@ -272,10 +260,7 @@ def get_chart_data(filters, chart_columns, income, expense, net_profit_loss, cur
     if net_profit:
         datasets.append({"name": _("Net Profit/Loss"), "values": net_profit})
     chart = {"data": {"labels": labels, "datasets": datasets}}
-    if not filters.accumulated_values:
-        chart["type"] = "bar"
-    else:
-        chart["type"] = "line"
+    chart["type"] = "bar" if not filters.accumulated_values else "line"
     chart["fieldtype"] = "Currency"
     chart["options"] = "currency"
     chart["currency"] = currency
