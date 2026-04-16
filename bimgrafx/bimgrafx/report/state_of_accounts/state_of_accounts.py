@@ -9,6 +9,9 @@ def execute(filters=None):
     return columns, data
 
 
+# ---------------------------------------------------------
+# COLUMNS
+# ---------------------------------------------------------
 def get_columns():
     return [
         {
@@ -43,7 +46,6 @@ def get_columns():
             "fieldname": "currency",
             "fieldtype": "Link",
             "options": "Currency",
-            "width": 80,
             "hidden": 1,
         },
         {
@@ -67,6 +69,16 @@ def get_columns():
             "options": "currency",
             "width": 170,
         },
+
+        # ✅ NEW (display only, NOT summed)
+        {
+            "label": "Customer Total",
+            "fieldname": "customer_total",
+            "fieldtype": "Currency",
+            "options": "currency",
+            "width": 150,
+        },
+
         {
             "label": "Payment Status",
             "fieldname": "payment_status",
@@ -95,6 +107,9 @@ def get_columns():
     ]
 
 
+# ---------------------------------------------------------
+# DATA
+# ---------------------------------------------------------
 def get_data(filters):
     conditions = "si.docstatus = 1"
 
@@ -107,24 +122,21 @@ def get_data(filters):
     if filters.get("customer"):
         conditions += " AND si.customer = %(customer)s"
 
-    # Fetch each payment row individually (no GROUP_CONCAT)
-    # so we can render one payment line per invoice below
     rows = frappe.db.sql(
         f"""
         SELECT
-            si.name                     AS invoice,
+            si.name AS invoice,
             si.customer,
             si.company,
             si.grand_total,
             si.outstanding_amount,
-            si.posting_date             AS invoice_date,
-            c.default_currency          AS currency,
-            pe.name                     AS payment_entry,
-            pe.posting_date             AS payment_date,
+            si.posting_date AS invoice_date,
+            c.default_currency AS currency,
+            pe.name AS payment_entry,
+            pe.posting_date AS payment_date,
             IFNULL(per.allocated_amount, 0) AS allocated_amount
         FROM `tabSales Invoice` si
-        LEFT JOIN `tabCompany` c
-            ON c.name = si.company
+        LEFT JOIN `tabCompany` c ON c.name = si.company
         LEFT JOIN `tabPayment Entry Reference` per
             ON per.reference_name = si.name
             AND per.reference_doctype = 'Sales Invoice'
@@ -138,43 +150,44 @@ def get_data(filters):
         as_dict=True,
     )
 
-    # ── Group rows: customer → invoice → [payments] ──────────────────────────
     from collections import OrderedDict
 
-    customers = OrderedDict()   # customer → OrderedDict of invoices
+    customers = OrderedDict()
+
     for r in rows:
         cust = r.customer
-        inv  = r.invoice
+        inv = r.invoice
 
         if cust not in customers:
             customers[cust] = OrderedDict()
 
         if inv not in customers[cust]:
             customers[cust][inv] = {
-                "meta": r,          # first row carries invoice-level fields
+                "meta": r,
                 "payments": [],
             }
 
         if r.payment_entry:
             customers[cust][inv]["payments"].append(r)
 
-    # ── Build flat data list ──────────────────────────────────────────────────
     data = []
 
     for cust, invoices in customers.items():
-        # ── Accumulate customer-level totals ──────────────────────────────────
-        cust_invoice_value   = 0
-        cust_paid_amount     = 0
-        cust_outstanding     = 0
+
+        cust_invoice_value = 0
+        cust_paid_amount = 0
+        cust_outstanding = 0
+
+        start_index = len(data)
 
         for inv_name, inv_data in invoices.items():
-            meta         = inv_data["meta"]
-            payments     = inv_data["payments"]
-            outstanding  = flt(meta.outstanding_amount)
-            paid_amount  = sum(flt(p.allocated_amount) for p in payments)
-            grand_total  = flt(meta.grand_total)
+            meta = inv_data["meta"]
+            payments = inv_data["payments"]
 
-            # Payment status
+            outstanding = flt(meta.outstanding_amount)
+            paid_amount = sum(flt(p.allocated_amount) for p in payments)
+            grand_total = flt(meta.grand_total)
+
             if outstanding <= 0:
                 payment_status = "Paid"
             elif paid_amount > 0:
@@ -184,69 +197,62 @@ def get_data(filters):
 
             ageing_days = date_diff(today(), meta.invoice_date) if outstanding > 0 else 0
 
-            # ── Invoice header row ────────────────────────────────────────────
+            # ✅ Invoice row
             data.append({
-                "name":               inv_name,
-                "customer":           cust,
-                "company":            meta.company,
-                "posting_date":       meta.invoice_date,
-                "currency":           meta.currency,
-                "invoice_value":      grand_total,
-                "paid_amount":        paid_amount,
+                "name": inv_name,
+                "customer": cust,
+                "company": meta.company,
+                "posting_date": meta.invoice_date,
+                "currency": meta.currency,
+                "invoice_value": grand_total,
+                "paid_amount": paid_amount,
                 "outstanding_amount": outstanding,
-                "payment_status":     payment_status,
-                "payment_entry":      "",
-                "payment_date":       "",
-                "ageing_days":        ageing_days,
-                "indent":             1,           # indent under customer
+                "customer_total": None,
+                "payment_status": payment_status,
+                "indent": 1,
             })
 
-            # ── One child row per payment ─────────────────────────────────────
+            # ✅ Payment rows
             for pmt in payments:
                 data.append({
-                    "name":               "",
-                    "customer":           "",
-                    "company":            "",
-                    "posting_date":       "",
-                    "currency":           meta.currency,
-                    "invoice_value":      "",
-                    "paid_amount":        flt(pmt.allocated_amount),
-                    "outstanding_amount": "",
-                    "payment_status":     "Payment",
-                    "payment_entry":      pmt.payment_entry,
-                    "payment_date":       pmt.payment_date,
-                    "ageing_days":        "",
-                    "indent":             2,       # indent under invoice
+                    "name": "",
+                    "customer": "",
+                    "company": "",
+                    "posting_date": "",
+                    "currency": meta.currency,
+                    "invoice_value": None,
+                    "paid_amount": flt(pmt.allocated_amount),
+                    "outstanding_amount": None,
+                    "customer_total": None,
+                    "payment_status": "Payment",
+                    "payment_entry": pmt.payment_entry,
+                    "payment_date": pmt.payment_date,
+                    "indent": 2,
                 })
 
-            # Accumulate for customer subtotal
             cust_invoice_value += grand_total
-            cust_paid_amount   += paid_amount
-            cust_outstanding   += outstanding
+            cust_paid_amount += paid_amount
+            cust_outstanding += outstanding
 
-        # ── Customer header / subtotal row (inserted BEFORE its invoices) ─────
-        # We collect invoice rows first, then prepend the customer group row.
-        # Simpler approach: insert customer row before the invoice block.
-        # Find where this customer's block starts and insert there.
-        insert_pos = next(
-            (i for i, row in enumerate(data) if row.get("customer") == cust),
-            len(data),
-        )
-        data.insert(insert_pos, {
-            "name":               "",
-            "customer":           cust,
-            "company":            "",
-            "posting_date":       "",
-            "currency":           meta.currency,   # last meta is fine for currency
-            "invoice_value":      cust_invoice_value,
-            "paid_amount":        cust_paid_amount,
-            "outstanding_amount": cust_outstanding,
-            "payment_status":     "",
-            "payment_entry":      "",
-            "payment_date":       "",
-            "ageing_days":        "",
-            "indent":             0,               # top-level customer group
-            "bold":               1,
+        # ✅ Customer row (IMPORTANT FIX)
+        data.insert(start_index, {
+            "name": "",
+            "customer": cust,
+            "company": "",
+            "posting_date": "",
+            "currency": meta.currency,
+
+            # ❌ DO NOT PUT TOTALS HERE
+            "invoice_value": None,
+            "paid_amount": None,
+            "outstanding_amount": None,
+
+            # ✅ SHOW HERE INSTEAD
+            "customer_total": cust_invoice_value,
+
+            "payment_status": "",
+            "indent": 0,
+            "bold": 1,
         })
 
     return data
