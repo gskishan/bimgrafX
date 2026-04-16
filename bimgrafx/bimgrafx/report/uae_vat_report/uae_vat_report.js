@@ -1,3 +1,6 @@
+// Copyright (c) 2016, Frappe Technologies Pvt. Ltd. and contributors
+// For license information, please see license.txt
+
 frappe.query_reports["UAE VAT Report"] = {
 	filters: [
 		{
@@ -5,25 +8,35 @@ frappe.query_reports["UAE VAT Report"] = {
 			label: __("Company"),
 			fieldtype: "Link",
 			options: "Company",
-			default: frappe.defaults.get_user_default("Company"),
 			reqd: 1,
-			on_change: function () {
-				frappe.query_report.refresh();
-			},
+			default: frappe.defaults.get_user_default("Company"),
 		},
 		{
 			fieldname: "from_date",
 			label: __("From Date"),
 			fieldtype: "Date",
-			default: frappe.datetime.get_today(),
 			reqd: 1,
+			default: frappe.datetime.add_months(frappe.datetime.get_today(), -3),
 		},
 		{
 			fieldname: "to_date",
 			label: __("To Date"),
 			fieldtype: "Date",
-			default: frappe.datetime.get_today(),
 			reqd: 1,
+			default: frappe.datetime.get_today(),
 		},
 	],
+	formatter: function (value, row, column, data, default_formatter) {
+		if (
+			data &&
+			(data.legend == "VAT on Sales and All Other Outputs" ||
+				data.legend == "VAT on Expenses and All Other Inputs") &&
+			data.legend == value
+		) {
+			value = $(`<span>${value}</span>`);
+			var $value = $(value).css("font-weight", "bold");
+			value = $value.wrap("<p></p>").parent().html();
+		}
+		return value;
+	},
 };
