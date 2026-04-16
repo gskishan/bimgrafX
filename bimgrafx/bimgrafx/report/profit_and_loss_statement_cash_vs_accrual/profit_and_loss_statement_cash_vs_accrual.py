@@ -19,7 +19,10 @@ from erpnext.accounts.report.financial_statements import (
 
 
 def execute(filters=None):
-    if filters and filters.report_template:
+    # ── Always ensure filters is a safe dict, never None ─────────────────────
+    filters = frappe._dict(filters or {})
+
+    if filters.get("report_template"):
         return FinancialReportEngine().execute(filters)
 
     # ── Inject cash-basis GL filter when accounting_method = "Cash" ──────────
@@ -73,7 +76,9 @@ def execute(filters=None):
     currency = filters.presentation_currency or frappe.get_cached_value(
         "Company", filters.company, "default_currency"
     )
-    chart = get_chart_data(filters, period_list, income, expense, net_profit_loss, currency)
+
+    # ── Fix: pass `columns` (not `period_list`) to get_chart_data ────────────
+    chart = get_chart_data(filters, columns, income, expense, net_profit_loss, currency)
 
     report_summary, primitive_summary = get_report_summary(
         period_list, filters.periodicity, income, expense, net_profit_loss, currency, filters
@@ -103,17 +108,14 @@ def _apply_cash_basis_filter(filters):
     Build a list of voucher_no values that represent cash movements
     (Payment Entries + Journal Entries that settle invoices) and pass
     them to the standard get_data pipeline via a custom filter key
-    `cash_basis_vouchers`.  The monkey-patch below overrides
-    frappe.db.get_value so that the GL Entry query picks up the filter.
+    `cash_basis_vouchers`.
 
-    Simpler / more maintainable approach used here:
     Override filters.accounting_method flag and add the paid-voucher
     list into filters so downstream _get_account_balances can skip
     invoice-sourced GL entries.
     """
     filters = frappe._dict(filters)
 
-    # Collect all Payment Entry voucher numbers in the period
     conditions = ""
     params = {"company": filters.company}
 
@@ -151,9 +153,8 @@ def _apply_cash_basis_filter(filters):
 
     cash_vouchers = list(set(payment_vouchers + je_vouchers))
 
-    # Store on filters so our patched get_gl_entries can use it
     filters["cash_basis_vouchers"] = cash_vouchers
-    filters["use_cash_basis"]      = True
+    filters["use_cash_basis"] = True
 
     return filters
 
@@ -170,12 +171,12 @@ def _get_cash_basis_gl_entries(filters, account_list, period_list):
     voucher_placeholders = ", ".join(["%s"] * len(vouchers))
 
     conditions = f"gl.voucher_no IN ({voucher_placeholders})"
-    params     = vouchers[:]
+    params = vouchers[:]
 
     if account_list:
         acc_placeholders = ", ".join(["%s"] * len(account_list))
-        conditions      += f" AND gl.account IN ({acc_placeholders})"
-        params          += account_list
+        conditions += f" AND gl.account IN ({acc_placeholders})"
+        params += account_list
 
     if filters.get("company"):
         conditions += " AND gl.company = %s"
@@ -210,26 +211,29 @@ def get_report_summary(
 ):
     net_income, net_expense, net_profit = 0.0, 0.0, 0.0
 
+    # Ensure filters is always a safe dict
+    filters = frappe._dict(filters or {})
+
     if filters.get("accumulated_in_group_company"):
         period_list = get_filtered_list_for_consolidated_report(filters, period_list)
 
-    if filters.accumulated_values:
+    if filters.get("accumulated_values"):
         key = period_list[-1].key
         if income:
-            net_income = income[-2].get(key)
+            net_income = flt(income[-2].get(key), 3)
         if expense:
-            net_expense = expense[-2].get(key)
+            net_expense = flt(expense[-2].get(key), 3)
         if net_profit_loss:
-            net_profit = net_profit_loss.get(key)
+            net_profit = flt(net_profit_loss.get(key), 3)
     else:
         for period in period_list:
             key = period if consolidated else period.key
             if income:
-                net_income += income[-2].get(key)
+                net_income += flt(income[-2].get(key), 3)
             if expense:
-                net_expense += expense[-2].get(key)
+                net_expense += flt(expense[-2].get(key), 3)
             if net_profit_loss:
-                net_profit += net_profit_loss.get(key)
+                net_profit += flt(net_profit_loss.get(key), 3)
 
     if len(period_list) == 1 and periodicity == "Yearly":
         profit_label  = _("Profit This Year")
@@ -240,7 +244,7 @@ def get_report_summary(
         income_label  = _("Total Income")
         expense_label = _("Total Expense")
 
-    # ── Append Cash/Accrual badge to summary labels ───────────────────────────
+    # Append Cash/Accrual badge to summary labels
     method = filters.get("accounting_method", "Accrual")
     suffix = _(" (Cash Basis)") if method == "Cash" else _(" (Accrual Basis)")
     income_label  += suffix
@@ -248,8 +252,18 @@ def get_report_summary(
     profit_label  += suffix
 
     return [
-        {"value": net_income,  "label": income_label,  "datatype": "Currency", "currency": currency},
-        {"value": net_expense, "label": expense_label, "datatype": "Currency", "currency": currency},
+        {
+            "value":    net_income,
+            "label":    income_label,
+            "datatype": "Currency",
+            "currency": currency,
+        },
+        {
+            "value":    net_expense,
+            "label":    expense_label,
+            "datatype": "Currency",
+            "currency": currency,
+        },
         {
             "value":     net_profit,
             "indicator": "Green" if net_profit > 0 else "Red",
@@ -267,26 +281,26 @@ def get_report_summary(
 def get_net_profit_loss(income, expense, period_list, company, currency=None, consolidated=False):
     total = 0
     net_profit_loss = {
-        "account_name":    "'" + _("Profit for the year") + "'",
-        "account":         "'" + _("Profit for the year") + "'",
+        "account_name":     "'" + _("Profit for the year") + "'",
+        "account":          "'" + _("Profit for the year") + "'",
         "warn_if_negative": True,
-        "currency":        currency or frappe.get_cached_value("Company", company, "default_currency"),
+        "currency":         currency or frappe.get_cached_value("Company", company, "default_currency"),
     }
 
     has_value = False
 
     for period in period_list:
         key           = period if consolidated else period.key
-        total_income  = flt(income[-2][key],  3) if income  else 0
-        total_expense = flt(expense[-2][key], 3) if expense else 0
+        total_income  = flt(income[-2][key],  3) if income  else 0.0
+        total_expense = flt(expense[-2][key], 3) if expense else 0.0
 
-        net_profit_loss[key] = total_income - total_expense
+        net_profit_loss[key] = flt(total_income - total_expense, 3)
 
         if net_profit_loss[key]:
             has_value = True
 
-        total += flt(net_profit_loss[key])
-        net_profit_loss["total"] = total
+        total += net_profit_loss[key]
+        net_profit_loss["total"] = flt(total, 3)
 
     if has_value:
         return net_profit_loss
@@ -296,41 +310,51 @@ def get_net_profit_loss(income, expense, period_list, company, currency=None, co
 # Chart
 # ---------------------------------------------------------------------------
 
-def get_chart_data(filters, chart_columns, income, expense, net_profit_loss, currency):
-    labels = [col.get("label") for col in chart_columns]
+def get_chart_data(filters, columns, income, expense, net_profit_loss, currency):
+    # `columns` is the list returned by get_columns() — each has 'label' and 'fieldname'
+    labels         = []
+    income_data    = []
+    expense_data   = []
+    net_profit     = []
 
-    income_data, expense_data, net_profit = [], [], []
-
-    for col in chart_columns:
+    for col in columns:
+        # period columns carry a 'key' added by get_columns(); fall back to fieldname
         key = col.get("key") or col.get("fieldname")
+        if not key:
+            continue
+
+        labels.append(col.get("label"))
+
         if income:
-            income_data.append(income[-2].get(key))
+            income_data.append(flt(income[-2].get(key), 3))
         if expense:
-            expense_data.append(expense[-2].get(key))
+            expense_data.append(flt(expense[-2].get(key), 3))
         if net_profit_loss:
-            net_profit.append(net_profit_loss.get(key))
+            net_profit.append(flt(net_profit_loss.get(key), 3))
 
     datasets = []
     if income_data:
-        datasets.append({"name": _("Income"), "values": income_data})
+        datasets.append({"name": _("Income"),        "values": income_data})
     if expense_data:
-        datasets.append({"name": _("Expense"), "values": expense_data})
+        datasets.append({"name": _("Expense"),       "values": expense_data})
     if net_profit:
         datasets.append({"name": _("Net Profit/Loss"), "values": net_profit})
 
+    if not datasets:
+        return {}
+
     chart = {"data": {"labels": labels, "datasets": datasets}}
 
-    if not filters.accumulated_values:
-        chart["type"] = "bar"
-    else:
-        chart["type"] = "line"
+    # Ensure filters is safe
+    filters = frappe._dict(filters or {})
 
+    chart["type"]      = "line" if filters.get("accumulated_values") else "bar"
     chart["fieldtype"] = "Currency"
     chart["options"]   = "currency"
     chart["currency"]  = currency
 
-    # ── Tag chart title with basis ────────────────────────────────────────────
-    method = filters.get("accounting_method", "Accrual")
+    # Tag chart title with accounting basis
+    method        = filters.get("accounting_method", "Accrual")
     chart["title"] = _("Profit and Loss — {0} Basis").format(method)
 
     return chart
