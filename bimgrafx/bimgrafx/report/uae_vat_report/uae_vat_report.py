@@ -162,8 +162,8 @@ def get_data(filters):
             WHERE si.company = %(company)s
               AND si.posting_date BETWEEN %(from_date)s AND %(to_date)s
               AND si.docstatus = 1
-              AND si.taxes_and_charges NOT LIKE '%Zero%'
-              AND si.taxes_and_charges NOT LIKE '%Exempt%'
+              AND si.taxes_and_charges NOT LIKE '%%Zero%%'
+              AND si.taxes_and_charges NOT LIKE '%%Exempt%%'
             """,
             {"company": company, "from_date": from_date, "to_date": to_date},
         )
@@ -218,7 +218,7 @@ def get_data(filters):
             WHERE si.company = %(company)s
               AND si.posting_date BETWEEN %(from_date)s AND %(to_date)s
               AND si.docstatus = 1
-              AND si.taxes_and_charges LIKE '%Zero%'
+              AND si.taxes_and_charges LIKE '%%Zero%%'
             """,
             {"company": company, "from_date": from_date, "to_date": to_date},
         )
@@ -234,7 +234,7 @@ def get_data(filters):
               AND si.docstatus = 1
               AND stc.rate = 0
               AND stc.charge_type != 'Actual'
-              AND si.taxes_and_charges LIKE '%Zero%'
+              AND si.taxes_and_charges LIKE '%%Zero%%'
             """,
             {"company": company, "from_date": from_date, "to_date": to_date},
         )
@@ -254,7 +254,7 @@ def get_data(filters):
             WHERE si.company = %(company)s
               AND si.posting_date BETWEEN %(from_date)s AND %(to_date)s
               AND si.docstatus = 1
-              AND si.taxes_and_charges LIKE '%Exempt%'
+              AND si.taxes_and_charges LIKE '%%Exempt%%'
             """,
             {"company": company, "from_date": from_date, "to_date": to_date},
         )
@@ -274,7 +274,7 @@ def get_data(filters):
               AND si.posting_date BETWEEN %(from_date)s AND %(to_date)s
               AND si.docstatus = 1
               AND c.tax_id IS NOT NULL AND c.tax_id != ''
-              AND si.customer_address NOT LIKE '%UAE%'
+              AND si.customer_address NOT LIKE '%%UAE%%'
             """,
             {"company": company, "from_date": from_date, "to_date": to_date},
         )
