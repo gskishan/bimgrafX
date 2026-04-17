@@ -44,7 +44,7 @@ def get_columns():
             "fieldname": "total",
             "label": _("Total"),
             "fieldtype": "Currency",
-            "options": "currency",
+            "options": "AED",   # Hardcoded AED — prevents INR/system currency override
             "width": 180,
         },
         {
@@ -63,8 +63,8 @@ def get_data(filters):
     from_date = filters.get("from_date")
     to_date = filters.get("to_date")
 
-    # Fetch default currency for company
-    currency = frappe.get_value("Company", company, "default_currency") or "AED"
+    # Force AED — do not pull from company default_currency to avoid INR symbol
+    currency = "AED"
 
     # ------------------------------------------------------------------
     # Helper: sum GL entries for a given list of account types / names
