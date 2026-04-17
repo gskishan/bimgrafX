@@ -1,7 +1,7 @@
 // Copyright (c) 2025, Your Company and contributors
 // For license information, please see license.txt
 
-frappe.query_reports["UAE VAT Summary Report"] = {
+frappe.query_reports["UAE VAT Report"] = {
 	filters: [
 		{
 			fieldname: "company",
