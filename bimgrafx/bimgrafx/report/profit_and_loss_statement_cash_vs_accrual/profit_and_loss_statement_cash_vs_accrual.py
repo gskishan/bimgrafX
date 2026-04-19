@@ -23,7 +23,7 @@ from erpnext.accounts.report.financial_statements import (
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# CASH BASIS GL FETCH  (pure SQL — no frappe.qb / walk())
+# CASH BASIS GL FETCH
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _set_gl_entries_cash(
@@ -37,27 +37,40 @@ def _set_gl_entries_cash(
     ignore_closing_entries=False,
 ):
     """
-    Populate gl_entries_by_account using ONLY cash-movement vouchers:
-        • Payment Entry
-        • Journal Entry  (ALL JEs — direct expenses, bank charges, etc.)
+    TWO-STEP cash basis fetch:
 
-    This mirrors QuickBooks Cash basis: income/expense is recognised
-    when money actually moves, not when an invoice is raised.
+    STEP 1 — Find every voucher_no that touched a Bank/Cash account.
+             (Payment Entry, Journal Entry, Bank Transaction)
+
+    STEP 2 — Pull the Income/Expense GL legs of those vouchers only.
+
+    Why two steps?
+    The old single-query approach filtered voucher_type on the Income/Expense
+    GL rows directly. That works for most companies but fails when:
+      • The company uses Journal Entries that debit/credit both sides
+      • Account tree lft/rgt boundaries differ between companies
+      • Payments exist but the income leg account falls outside the root range
+    By first finding "which vouchers touched cash/bank" and then fetching
+    their income/expense legs, we correctly capture all cash-basis activity.
     """
+
+    # ── base params ───────────────────────────────────────────────────────────
     params = {
-        "company":  company,
-        "to_date":  to_date,
-        "lft":      root_lft,
-        "rgt":      root_rgt,
+        "company": company,
+        "to_date": to_date,
+        "lft":     root_lft,
+        "rgt":     root_rgt,
     }
 
-    # ── date range ────────────────────────────────────────────────────────────
-    from_condition = ""
+    # ── date conditions ───────────────────────────────────────────────────────
+    from_condition       = ""
+    from_condition_cash  = ""
     if from_date:
-        from_condition = " AND gl.posting_date >= %(from_date)s"
+        from_condition      = " AND gl.posting_date >= %(from_date)s"
+        from_condition_cash = " AND gl_cash.posting_date >= %(from_date)s"
         params["from_date"] = from_date
 
-    # ── opening / closing entries ─────────────────────────────────────────────
+    # ── closing entries ───────────────────────────────────────────────────────
     opening_condition = ""
     if ignore_closing_entries:
         opening_condition = " AND gl.voucher_type != 'Period Closing Voucher'"
@@ -69,9 +82,9 @@ def _set_gl_entries_cash(
         params["finance_book"] = filters["finance_book"]
     elif filters.get("include_default_book_entries"):
         finance_book_condition = (
-            " AND (gl.finance_book IS NULL OR gl.finance_book = '' "
-            "     OR gl.finance_book = (SELECT default_finance_book "
-            "                           FROM `tabCompany` "
+            " AND (gl.finance_book IS NULL OR gl.finance_book = ''"
+            "     OR gl.finance_book = (SELECT default_finance_book"
+            "                           FROM `tabCompany`"
             "                           WHERE name = %(company)s))"
         )
 
@@ -86,6 +99,42 @@ def _set_gl_entries_cash(
     if filters.get("project"):
         project_condition = " AND gl.project = %(project)s"
         params["project"] = filters["project"]
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # STEP 1: Find all voucher_nos that touched a Bank or Cash account
+    # ──────────────────────────────────────────────────────────────────────────
+    cash_voucher_rows = frappe.db.sql(
+        f"""
+        SELECT DISTINCT gl_cash.voucher_no
+        FROM `tabGL Entry` gl_cash
+        INNER JOIN `tabAccount` cash_acc
+            ON cash_acc.name = gl_cash.account
+           AND cash_acc.account_type IN ('Bank', 'Cash')
+        WHERE
+            gl_cash.company      = %(company)s
+            AND gl_cash.is_cancelled = 0
+            AND gl_cash.posting_date <= %(to_date)s
+            AND gl_cash.voucher_type IN (
+                'Payment Entry',
+                'Journal Entry',
+                'Bank Transaction'
+            )
+            {from_condition_cash}
+        """,
+        params,
+        as_dict=False,
+    )
+
+    cash_voucher_nos = [r[0] for r in cash_voucher_rows]
+
+    if not cash_voucher_nos:
+        # No cash/bank movements found — nothing to show in Cash mode
+        return gl_entries_by_account
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # STEP 2: Pull Income/Expense GL entries for those vouchers
+    # ──────────────────────────────────────────────────────────────────────────
+    voucher_placeholders = ", ".join(["%s"] * len(cash_voucher_nos))
 
     gl_entries = frappe.db.sql(
         f"""
@@ -110,7 +159,7 @@ def _set_gl_entries_cash(
             gl.company      = %(company)s
             AND gl.is_cancelled = 0
             AND gl.posting_date <= %(to_date)s
-            AND gl.voucher_type IN ('Payment Entry', 'Journal Entry')
+            AND gl.voucher_no IN ({voucher_placeholders})
             {from_condition}
             {opening_condition}
             {finance_book_condition}
@@ -118,7 +167,7 @@ def _set_gl_entries_cash(
             {project_condition}
         ORDER BY gl.posting_date
         """,
-        params,
+        list(params.values()) + cash_voucher_nos,
         as_dict=True,
     )
 
@@ -170,6 +219,13 @@ def get_data(
         (root_type, company),
         as_dict=True,
     )
+
+    if not roots:
+        frappe.log_error(
+            f"Cash P&L: No root accounts found for root_type={root_type}, company={company}",
+            "Cash PnL Warning",
+        )
+        return None
 
     from_date = (
         period_list[0]["year_start_date"] if only_current_fiscal_year else None
@@ -456,11 +512,11 @@ def get_chart_data(
 
     datasets = []
     if income_data:
-        datasets.append({"name": _("Income"),         "values": income_data})
+        datasets.append({"name": _("Income"),          "values": income_data})
     if expense_data:
-        datasets.append({"name": _("Expense"),        "values": expense_data})
+        datasets.append({"name": _("Expense"),         "values": expense_data})
     if net_profit:
-        datasets.append({"name": _("Net Profit/Loss"),"values": net_profit})
+        datasets.append({"name": _("Net Profit/Loss"), "values": net_profit})
 
     chart             = {"data": {"labels": labels, "datasets": datasets}}
     chart["type"]     = "bar" if not filters.accumulated_values else "line"
