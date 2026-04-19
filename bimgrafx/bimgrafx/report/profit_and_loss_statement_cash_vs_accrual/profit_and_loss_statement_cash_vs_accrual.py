@@ -23,7 +23,7 @@ from erpnext.accounts.report.financial_statements import (
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# CASH BASIS GL FETCH
+# CASH BASIS GL FETCH  (pure SQL — no frappe.qb / walk())
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _set_gl_entries_cash(
@@ -37,98 +37,55 @@ def _set_gl_entries_cash(
     ignore_closing_entries=False,
 ):
     """
-    TWO-STEP cash basis fetch.
+    Populate gl_entries_by_account using ONLY cash-movement vouchers:
+        • Payment Entry
+        • Journal Entry  (ALL JEs — direct expenses, bank charges, etc.)
 
-    STEP 1 — Find every voucher_no that touched a Bank/Cash account.
-    STEP 2 — Pull the Income/Expense GL legs of those vouchers.
-
-    FIX: Use ONLY %s positional params throughout — never mix %(key)s
-    dict-style with %s list-style in the same frappe.db.sql() call,
-    as PyMySQL raises 'format requires a mapping' when both are present.
+    This mirrors QuickBooks Cash basis: income/expense is recognised
+    when money actually moves, not when an invoice is raised.
     """
+    params = {
+        "company":  company,
+        "to_date":  to_date,
+        "lft":      root_lft,
+        "rgt":      root_rgt,
+    }
 
-    # ── STEP 1 params (all positional %s) ────────────────────────────────────
-    step1_values = [company, to_date]
-    from_condition_step1 = ""
-    if from_date:
-        from_condition_step1 = " AND gl_cash.posting_date >= %s"
-        step1_values.append(from_date)
-
-    cash_voucher_rows = frappe.db.sql(
-        f"""
-        SELECT DISTINCT gl_cash.voucher_no
-        FROM `tabGL Entry` gl_cash
-        INNER JOIN `tabAccount` cash_acc
-            ON cash_acc.name = gl_cash.account
-           AND cash_acc.account_type IN ('Bank', 'Cash')
-        WHERE
-            gl_cash.company      = %s
-            AND gl_cash.is_cancelled = 0
-            AND gl_cash.posting_date <= %s
-            AND gl_cash.voucher_type IN (
-                'Payment Entry',
-                'Journal Entry',
-                'Bank Transaction'
-            )
-            {from_condition_step1}
-        """,
-        step1_values,
-        as_dict=False,
-    )
-
-    cash_voucher_nos = [r[0] for r in cash_voucher_rows]
-
-    if not cash_voucher_nos:
-        return gl_entries_by_account
-
-    # ── STEP 2 conditions (all positional %s) ────────────────────────────────
+    # ── date range ────────────────────────────────────────────────────────────
     from_condition = ""
-    opening_condition = ""
-    finance_book_condition = ""
-    cost_center_condition = ""
-    project_condition = ""
-
-    # Build step2 values list in the same order as conditions below
-    # Fixed params: lft, rgt, company, to_date  — added first
-    step2_values = [root_lft, root_rgt, company, to_date]
-
-    # voucher_nos added via IN clause — appended after fixed params
-    voucher_placeholders = ", ".join(["%s"] * len(cash_voucher_nos))
-
-    # from_date
     if from_date:
-        from_condition = " AND gl.posting_date >= %s"
-        step2_values.append(from_date)
+        from_condition = " AND gl.posting_date >= %(from_date)s"
+        params["from_date"] = from_date
 
-    # closing entries
+    # ── opening / closing entries ─────────────────────────────────────────────
+    opening_condition = ""
     if ignore_closing_entries:
         opening_condition = " AND gl.voucher_type != 'Period Closing Voucher'"
 
-    # finance book
+    # ── finance book ──────────────────────────────────────────────────────────
+    finance_book_condition = ""
     if filters.get("finance_book"):
-        finance_book_condition = " AND gl.finance_book = %s"
-        step2_values.append(filters["finance_book"])
+        finance_book_condition = " AND gl.finance_book = %(finance_book)s"
+        params["finance_book"] = filters["finance_book"]
     elif filters.get("include_default_book_entries"):
         finance_book_condition = (
-            " AND (gl.finance_book IS NULL OR gl.finance_book = ''"
-            "     OR gl.finance_book = ("
-            "         SELECT default_finance_book FROM `tabCompany` WHERE name = %s"
-            "     ))"
+            " AND (gl.finance_book IS NULL OR gl.finance_book = '' "
+            "     OR gl.finance_book = (SELECT default_finance_book "
+            "                           FROM `tabCompany` "
+            "                           WHERE name = %(company)s))"
         )
-        step2_values.append(company)
 
-    # cost centre
+    # ── cost centre ───────────────────────────────────────────────────────────
+    cost_center_condition = ""
     if filters.get("cost_center"):
-        cost_center_condition = " AND gl.cost_center = %s"
-        step2_values.append(filters["cost_center"])
+        cost_center_condition = " AND gl.cost_center = %(cost_center)s"
+        params["cost_center"] = filters["cost_center"]
 
-    # project
+    # ── project ───────────────────────────────────────────────────────────────
+    project_condition = ""
     if filters.get("project"):
-        project_condition = " AND gl.project = %s"
-        step2_values.append(filters["project"])
-
-    # voucher_nos go at the end — matching the IN (%s, %s, ...) placeholder
-    step2_values.extend(cash_voucher_nos)
+        project_condition = " AND gl.project = %(project)s"
+        params["project"] = filters["project"]
 
     gl_entries = frappe.db.sql(
         f"""
@@ -147,13 +104,13 @@ def _set_gl_entries_cash(
         FROM `tabGL Entry` gl
         INNER JOIN `tabAccount` acc
             ON acc.name = gl.account
-           AND acc.lft  >= %s
-           AND acc.rgt  <= %s
+           AND acc.lft  >= %(lft)s
+           AND acc.rgt  <= %(rgt)s
         WHERE
-            gl.company      = %s
+            gl.company      = %(company)s
             AND gl.is_cancelled = 0
-            AND gl.posting_date <= %s
-            AND gl.voucher_no IN ({voucher_placeholders})
+            AND gl.posting_date <= %(to_date)s
+            AND gl.voucher_type IN ('Payment Entry', 'Journal Entry')
             {from_condition}
             {opening_condition}
             {finance_book_condition}
@@ -161,7 +118,7 @@ def _set_gl_entries_cash(
             {project_condition}
         ORDER BY gl.posting_date
         """,
-        step2_values,
+        params,
         as_dict=True,
     )
 
@@ -214,13 +171,6 @@ def get_data(
         as_dict=True,
     )
 
-    if not roots:
-        frappe.log_error(
-            f"Cash P&L: No root accounts found for root_type={root_type}, company={company}",
-            "Cash PnL Warning",
-        )
-        return None
-
     from_date = (
         period_list[0]["year_start_date"] if only_current_fiscal_year else None
     )
@@ -239,6 +189,7 @@ def get_data(
                 ignore_closing_entries=ignore_closing_entries,
             )
         else:
+            # Standard accrual path — use ERPNext's built-in function
             set_gl_entries_by_account(
                 company,
                 from_date,
@@ -505,11 +456,11 @@ def get_chart_data(
 
     datasets = []
     if income_data:
-        datasets.append({"name": _("Income"),          "values": income_data})
+        datasets.append({"name": _("Income"),         "values": income_data})
     if expense_data:
-        datasets.append({"name": _("Expense"),         "values": expense_data})
+        datasets.append({"name": _("Expense"),        "values": expense_data})
     if net_profit:
-        datasets.append({"name": _("Net Profit/Loss"), "values": net_profit})
+        datasets.append({"name": _("Net Profit/Loss"),"values": net_profit})
 
     chart             = {"data": {"labels": labels, "datasets": datasets}}
     chart["type"]     = "bar" if not filters.accumulated_values else "line"
