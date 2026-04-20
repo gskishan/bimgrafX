@@ -37,48 +37,39 @@ def _set_gl_entries_cash(
     ignore_closing_entries=False,
 ):
     """
-    TWO-STEP cash basis fetch — fixes missing income for companies
-    that use Sales/Purchase Invoices + Payment Entries.
+    CASH BASIS: Income/Expense is recognised on the date cash actually moves.
 
-    WHY TWO STEPS:
+    KEY FIX — Cross-year payments:
+    ───────────────────────────────
+    Invoice raised 2022, Payment received 2023.
+
+    Old bug: fetched invoice GL rows and filtered by posting_date >= from_date.
+             Invoice GL row has posting_date = 2022. So when filtering for 2023,
+             the row is excluded → income shows as ZERO in 2023. WRONG.
+
+    Correct: For invoice-linked GL entries, REPLACE posting_date with the
+             Payment Entry's posting_date (2023). This way the income appears
+             in the period when cash was actually received, not when billed.
+
+    How it works:
     ─────────────
-    Old approach filtered voucher_type IN ('Payment Entry','Journal Entry')
-    directly on Income/Expense GL rows.
+    Step 1a — Find Payment Entry / Journal Entry vouchers that touched Bank/Cash
+              within the requested date range.
+    Step 1b — From those Payment Entries, find linked invoices via
+              Payment Entry Reference table. Also record the payment_date
+              for each invoice so we can stamp it onto the GL rows.
+    Step 1c — Combine all voucher_nos (payments + invoices).
+    Step 2  — Fetch Income/Expense GL entries for all vouchers WITHOUT
+              the from_date filter (we need old invoice rows too).
+    Step 3  — For each GL row that belongs to an invoice voucher,
+              override posting_date → payment_date before returning.
+              Then filter by date in Python after the override.
 
-    Problem: When a customer pays a Sales Invoice, ERPNext creates:
-        • Sales Invoice GL  → voucher_type = 'Sales Invoice'   (Dr Receivable, Cr Income)
-        • Payment Entry GL  → voucher_type = 'Payment Entry'   (Dr Bank, Cr Receivable)
-
-    The income leg lives on the SALES INVOICE voucher, not the Payment Entry.
-    So filtering voucher_type = 'Payment Entry' on the income side gives ZERO.
-
-    CORRECT APPROACH:
-    ─────────────────
-    Step 1 — Find all voucher_nos that touched a Bank or Cash account.
-             These are the real cash movements (Payment Entry / Journal Entry
-             / Bank Transaction).
-    Step 2 — For those same voucher_nos, fetch ANY linked GL entries
-             that fall within the Income or Expense account root.
-
-    But wait — a Payment Entry's income leg is on the INVOICE voucher, not the
-    payment voucher itself. So we must also follow the Receivable/Payable link:
-
-    Step 1a — Get all Payment Entry voucher_nos touching Bank/Cash.
-    Step 1b — From those Payment Entries, find the against_voucher (the Invoice).
-    Step 1c — Combine: original payment vouchers + their linked invoices.
-    Step 2  — Fetch Income/Expense GL entries for ALL those voucher_nos.
-
-    This correctly captures:
-    ✓ Direct JE income/expense (bank charges, direct income etc.)
-    ✓ Invoice-based income/expense recognised on payment date
-    ✓ Multi-company scenarios with different account tree boundaries
-
-    IMPORTANT: Uses ONLY %s positional params — never %(key)s dict style —
-    to avoid PyMySQL 'format requires a mapping' error when mixing styles.
+    Uses ONLY %s positional params — no %(key)s dict style.
     """
 
     # ─────────────────────────────────────────────────────────────────────────
-    # STEP 1a — Find voucher_nos that touched Bank / Cash accounts
+    # STEP 1a — Find vouchers that touched Bank/Cash in the date range
     # ─────────────────────────────────────────────────────────────────────────
     step1_values = [company, to_date]
     from_cond_step1 = ""
@@ -90,13 +81,14 @@ def _set_gl_entries_cash(
         f"""
         SELECT DISTINCT
             gl_cash.voucher_no,
-            gl_cash.voucher_type
+            gl_cash.voucher_type,
+            gl_cash.posting_date AS payment_date
         FROM `tabGL Entry` gl_cash
         INNER JOIN `tabAccount` cash_acc
             ON  cash_acc.name         = gl_cash.account
             AND cash_acc.account_type IN ('Bank', 'Cash')
         WHERE
-            gl_cash.company      = %s
+            gl_cash.company         = %s
             AND gl_cash.is_cancelled = 0
             AND gl_cash.posting_date <= %s
             AND gl_cash.voucher_type IN (
@@ -113,19 +105,26 @@ def _set_gl_entries_cash(
     if not cash_rows:
         return gl_entries_by_account
 
-    cash_voucher_nos  = [r.voucher_no for r in cash_rows]
+    # Map: voucher_no → payment_date (for direct JE/Payment vouchers)
+    payment_date_map = {r.voucher_no: r.payment_date for r in cash_rows}
+
+    cash_voucher_nos  = list(payment_date_map.keys())
     payment_entry_nos = [r.voucher_no for r in cash_rows if r.voucher_type == "Payment Entry"]
 
     # ─────────────────────────────────────────────────────────────────────────
-    # STEP 1b — For Payment Entries, find the invoices they settled
-    #           (the income/expense actually lives on the invoice GL rows)
+    # STEP 1b — Find invoices settled by those Payment Entries
+    #           Record invoice_name → payment_date mapping
     # ─────────────────────────────────────────────────────────────────────────
-    invoice_voucher_nos = []
+    # invoice_payment_date_map: invoice voucher_no → payment_date
+    invoice_payment_date_map = {}
+
     if payment_entry_nos:
         pe_placeholders = ", ".join(["%s"] * len(payment_entry_nos))
         invoice_rows = frappe.db.sql(
             f"""
-            SELECT DISTINCT per.reference_name AS voucher_no
+            SELECT
+                per.reference_name  AS invoice_no,
+                per.parent          AS payment_entry_no
             FROM `tabPayment Entry Reference` per
             WHERE per.parent IN ({pe_placeholders})
               AND per.reference_doctype IN (
@@ -137,35 +136,38 @@ def _set_gl_entries_cash(
             payment_entry_nos,
             as_dict=True,
         )
-        invoice_voucher_nos = [r.voucher_no for r in invoice_rows]
+        for row in invoice_rows:
+            # Use the payment entry's date for this invoice
+            pay_date = payment_date_map.get(row.payment_entry_no)
+            if pay_date:
+                # If same invoice paid by multiple payments, use latest payment date
+                existing = invoice_payment_date_map.get(row.invoice_no)
+                if not existing or pay_date > existing:
+                    invoice_payment_date_map[row.invoice_no] = pay_date
 
     # ─────────────────────────────────────────────────────────────────────────
     # STEP 1c — Combine: cash vouchers + their linked invoices
     # ─────────────────────────────────────────────────────────────────────────
-    all_voucher_nos = list(set(cash_voucher_nos + invoice_voucher_nos))
+    all_voucher_nos = list(set(cash_voucher_nos + list(invoice_payment_date_map.keys())))
 
     if not all_voucher_nos:
         return gl_entries_by_account
 
     # ─────────────────────────────────────────────────────────────────────────
-    # STEP 2 — Fetch Income / Expense GL entries for all those vouchers
+    # STEP 2 — Fetch Income/Expense GL entries for ALL vouchers
+    #          NOTE: No from_date filter here — we need 2022 invoice rows too.
+    #          We will apply date filtering in Python after overriding dates.
     # ─────────────────────────────────────────────────────────────────────────
     voucher_placeholders = ", ".join(["%s"] * len(all_voucher_nos))
 
-    # Build positional values list in exact SQL column order
+    # positional values: lft, rgt, company, to_date, then voucher_nos
     step2_values = [root_lft, root_rgt, company, to_date]
-    # voucher_nos added after fixed params — must match IN clause position
     step2_values.extend(all_voucher_nos)
 
-    from_cond_step2       = ""
-    opening_condition     = ""
-    finance_book_cond     = ""
-    cost_center_cond      = ""
-    project_cond          = ""
-
-    if from_date:
-        from_cond_step2 = " AND gl.posting_date >= %s"
-        step2_values.append(from_date)
+    opening_condition = ""
+    finance_book_cond = ""
+    cost_center_cond  = ""
+    project_cond      = ""
 
     if ignore_closing_entries:
         opening_condition = " AND gl.voucher_type != 'Period Closing Voucher'"
@@ -210,11 +212,10 @@ def _set_gl_entries_cash(
             AND acc.lft  >= %s
             AND acc.rgt  <= %s
         WHERE
-            gl.company      = %s
+            gl.company         = %s
             AND gl.is_cancelled = 0
             AND gl.posting_date <= %s
             AND gl.voucher_no IN ({voucher_placeholders})
-            {from_cond_step2}
             {opening_condition}
             {finance_book_cond}
             {cost_center_cond}
@@ -225,12 +226,28 @@ def _set_gl_entries_cash(
         as_dict=True,
     )
 
+    # ─────────────────────────────────────────────────────────────────────────
+    # STEP 3 — Override posting_date for invoice GL rows → use payment_date
+    #          Then apply from_date filter in Python after the override
+    # ─────────────────────────────────────────────────────────────────────────
+    filtered_entries = []
+    for entry in gl_entries:
+        # If this GL row belongs to an invoice that was paid, override its date
+        if entry.voucher_no in invoice_payment_date_map:
+            entry.posting_date = invoice_payment_date_map[entry.voucher_no]
+
+        # Now apply the from_date filter (after date override)
+        if from_date and entry.posting_date < from_date:
+            continue
+
+        filtered_entries.append(entry)
+
     # ── presentation currency conversion ─────────────────────────────────────
     if filters and filters.get("presentation_currency"):
-        convert_to_presentation_currency(gl_entries, get_currency(filters))
+        convert_to_presentation_currency(filtered_entries, get_currency(filters))
 
     # ── populate the dict that calculate_values() expects ────────────────────
-    for entry in gl_entries:
+    for entry in filtered_entries:
         gl_entries_by_account.setdefault(entry.account, []).append(entry)
 
     return gl_entries_by_account
@@ -299,7 +316,6 @@ def get_data(
                 ignore_closing_entries=ignore_closing_entries,
             )
         else:
-            # Standard accrual path — use ERPNext's built-in function
             set_gl_entries_by_account(
                 company,
                 from_date,
@@ -312,7 +328,6 @@ def get_data(
                 ignore_closing_entries=ignore_closing_entries,
             )
 
-    # ── standard calculations (same for both modes) ────────────────────────
     calculate_values(
         accounts_by_name,
         gl_entries_by_account,
