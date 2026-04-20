@@ -1,398 +1,490 @@
-# Copyright (c) 2025, Your Company and contributors
+# Copyright (c) 2013, Frappe Technologies Pvt. Ltd. and contributors
 # For license information, please see license.txt
 
-from __future__ import unicode_literals
 import frappe
 from frappe import _
-from frappe.utils import flt, getdate
+from frappe.utils import flt
 
 
 def execute(filters=None):
-    if not filters:
-        filters = {}
-
-    validate_filters(filters)
-
     columns = get_columns()
-    data = get_data(filters)
+    data, emirates, amounts_by_emirate = get_data(filters)
     return columns, data
 
 
-def validate_filters(filters):
-    if not filters.get("from_date") or not filters.get("to_date"):
-        frappe.throw(_("Please set From Date and To Date"))
-
-    if getdate(filters.get("from_date")) > getdate(filters.get("to_date")):
-        frappe.throw(_("From Date cannot be greater than To Date"))
-
-
-def format_aed(value):
-    """Format number as AED string — completely bypasses ERPNext currency symbol rendering."""
-    val = flt(value)
-    formatted = "{:,.2f}".format(abs(val))
-    if val < 0:
-        return "AED -{0}".format(formatted)
-    return "AED {0}".format(formatted)
-
-
 def get_columns():
+    """
+    Columns for the UAE VAT Return report.
+    Using Float for amount and vat_amount so ERPNext renders real numbers
+    (not strings) — frappe.format() was converting to text which broke
+    sorting, totals and currency display.
+    """
     return [
         {
-            "fieldname": "box",
-            "label": _("Box"),
+            "fieldname": "no",
+            "label": _("No"),
             "fieldtype": "Data",
-            "width": 80,
+            "width": 60,
         },
         {
-            "fieldname": "description",
-            "label": _("Description"),
+            "fieldname": "legend",
+            "label": _("Legend"),
             "fieldtype": "Data",
-            "width": 460,
+            "width": 380,
         },
         {
-            "fieldname": "total",
-            "label": _("Total (AED)"),
-            "fieldtype": "Data",    # KEY FIX: Data type — ERPNext cannot override with INR symbol
-            "width": 200,
+            "fieldname": "amount",
+            "label": _("Amount (AED)"),
+            "fieldtype": "Float",
+            "precision": 2,
+            "width": 160,
+        },
+        {
+            "fieldname": "vat_amount",
+            "label": _("VAT Amount (AED)"),
+            "fieldtype": "Float",
+            "precision": 2,
+            "width": 160,
+        },
+        {
+            "fieldname": "vat_rate",
+            "label": _("VAT Rate %"),
+            "fieldtype": "Data",
+            "width": 100,
         },
     ]
 
 
-def get_data(filters):
-    company = filters.get("company")
-    from_date = filters.get("from_date")
-    to_date = filters.get("to_date")
+def get_data(filters=None):
+    data = []
+    emirates, amounts_by_emirate = append_vat_on_sales(data, filters)
+    append_vat_on_expenses(data, filters)
+    return data, emirates, amounts_by_emirate
 
-    # ------------------------------------------------------------------
-    # Compute sales (output VAT) per emirate — Box 1a to 1g
-    # ------------------------------------------------------------------
 
-    def get_taxable_sales_by_emirate(emirate_keyword):
-        result = frappe.db.sql(
-            """
-            SELECT SUM(sii.base_net_amount)
-            FROM `tabSales Invoice Item` sii
-            JOIN `tabSales Invoice` si ON si.name = sii.parent
-            JOIN `tabSales Taxes and Charges` stc ON stc.parent = si.name
-            WHERE si.company = %(company)s
-              AND si.posting_date BETWEEN %(from_date)s AND %(to_date)s
-              AND si.docstatus = 1
-              AND stc.account_head LIKE %(keyword)s
-              AND stc.charge_type != 'Actual'
-            """,
-            {
-                "company": company,
-                "from_date": from_date,
-                "to_date": to_date,
-                "keyword": f"%{emirate_keyword}%",
-            },
-        )
-        return flt(result[0][0]) if result else 0.0
+# ─────────────────────────────────────────────────────────────────────────────
+# SALES SECTION
+# ─────────────────────────────────────────────────────────────────────────────
 
-    def get_taxable_sales_generic():
-        result = frappe.db.sql(
-            """
-            SELECT SUM(si.base_net_total)
-            FROM `tabSales Invoice` si
-            WHERE si.company = %(company)s
-              AND si.posting_date BETWEEN %(from_date)s AND %(to_date)s
-              AND si.docstatus = 1
-              AND si.taxes_and_charges NOT LIKE '%%Zero%%'
-              AND si.taxes_and_charges NOT LIKE '%%Exempt%%'
-            """,
-            {"company": company, "from_date": from_date, "to_date": to_date},
-        )
-        return flt(result[0][0]) if result else 0.0
+def append_vat_on_sales(data, filters):
+    append_data(data, "", _("VAT on Sales and All Other Outputs"), None, None, "")
 
-    # ------------------------------------------------------------------
-    # Output VAT (Box 6)
-    # ------------------------------------------------------------------
+    emirates, amounts_by_emirate = standard_rated_expenses_emiratewise(data, filters)
 
-    def get_total_output_vat():
-        result = frappe.db.sql(
-            """
-            SELECT SUM(stc.base_tax_amount)
-            FROM `tabSales Taxes and Charges` stc
-            JOIN `tabSales Invoice` si ON si.name = stc.parent
-            WHERE si.company = %(company)s
-              AND si.posting_date BETWEEN %(from_date)s AND %(to_date)s
-              AND si.docstatus = 1
-              AND stc.charge_type != 'Actual'
-            """,
-            {"company": company, "from_date": from_date, "to_date": to_date},
-        )
-        return flt(result[0][0]) if result else 0.0
+    append_data(
+        data, "2",
+        _("Tax Refunds provided to Tourists under the Tax Refunds for Tourists Scheme"),
+        flt((-1) * get_tourist_tax_return_total(filters)),
+        flt((-1) * get_tourist_tax_return_tax(filters)),
+        "5%",
+    )
 
-    # ------------------------------------------------------------------
-    # Reverse Charge Sales (Box 2)
-    # ------------------------------------------------------------------
+    append_data(
+        data, "3",
+        _("Supplies subject to the reverse charge provision"),
+        flt(get_reverse_charge_total(filters)),
+        flt(get_reverse_charge_tax(filters)),
+        "5%",
+    )
 
-    def get_reverse_charge_sales():
-        result = frappe.db.sql(
-            """
-            SELECT SUM(si.base_net_total)
-            FROM `tabSales Invoice` si
-            WHERE si.company = %(company)s
-              AND si.posting_date BETWEEN %(from_date)s AND %(to_date)s
-              AND si.docstatus = 1
-              AND si.is_reverse_charge = 1
-            """,
-            {"company": company, "from_date": from_date, "to_date": to_date},
-        )
-        return flt(result[0][0]) if result else 0.0
+    append_data(
+        data, "4",
+        _("Zero Rated"),
+        flt(get_zero_rated_total(filters)),
+        0.0,
+        "0%",
+    )
 
-    # ------------------------------------------------------------------
-    # Zero-rated supplies (Box 3)
-    # ------------------------------------------------------------------
+    append_data(
+        data, "5",
+        _("Exempt Supplies"),
+        flt(get_exempt_total(filters)),
+        0.0,
+        "Exempt",
+    )
 
-    def get_zero_rated_sales():
-        result = frappe.db.sql(
-            """
-            SELECT SUM(si.base_net_total)
-            FROM `tabSales Invoice` si
-            WHERE si.company = %(company)s
-              AND si.posting_date BETWEEN %(from_date)s AND %(to_date)s
-              AND si.docstatus = 1
-              AND si.taxes_and_charges LIKE '%%Zero%%'
-            """,
-            {"company": company, "from_date": from_date, "to_date": to_date},
-        )
-        result2 = frappe.db.sql(
-            """
-            SELECT SUM(sii.base_net_amount)
-            FROM `tabSales Invoice Item` sii
-            JOIN `tabSales Invoice` si ON si.name = sii.parent
-            JOIN `tabSales Taxes and Charges` stc ON stc.parent = si.name
-            WHERE si.company = %(company)s
-              AND si.posting_date BETWEEN %(from_date)s AND %(to_date)s
-              AND si.docstatus = 1
-              AND stc.rate = 0
-              AND stc.charge_type != 'Actual'
-              AND si.taxes_and_charges LIKE '%%Zero%%'
-            """,
-            {"company": company, "from_date": from_date, "to_date": to_date},
-        )
-        val1 = flt(result[0][0]) if result else 0.0
-        val2 = flt(result2[0][0]) if result2 else 0.0
-        return val1 or val2
+    append_data(data, "", "", None, None, "")
+    return emirates, amounts_by_emirate
 
-    # ------------------------------------------------------------------
-    # Exempt supplies (Box 5)
-    # ------------------------------------------------------------------
 
-    def get_exempt_sales():
-        result = frappe.db.sql(
-            """
-            SELECT SUM(si.base_net_total)
-            FROM `tabSales Invoice` si
-            WHERE si.company = %(company)s
-              AND si.posting_date BETWEEN %(from_date)s AND %(to_date)s
-              AND si.docstatus = 1
-              AND si.taxes_and_charges LIKE '%%Exempt%%'
-            """,
-            {"company": company, "from_date": from_date, "to_date": to_date},
-        )
-        return flt(result[0][0]) if result else 0.0
+def standard_rated_expenses_emiratewise(data, filters):
+    total_emiratewise = get_total_emiratewise(filters)
+    emirates = get_emirates()
+    amounts_by_emirate = {}
 
-    # ------------------------------------------------------------------
-    # Supplies to registered customers outside UAE (Box 4)
-    # ------------------------------------------------------------------
-
-    def get_supplies_to_registered_customers():
-        result = frappe.db.sql(
-            """
-            SELECT SUM(si.base_net_total)
-            FROM `tabSales Invoice` si
-            JOIN `tabCustomer` c ON c.name = si.customer
-            WHERE si.company = %(company)s
-              AND si.posting_date BETWEEN %(from_date)s AND %(to_date)s
-              AND si.docstatus = 1
-              AND c.tax_id IS NOT NULL AND c.tax_id != ''
-              AND si.customer_address NOT LIKE '%%UAE%%'
-            """,
-            {"company": company, "from_date": from_date, "to_date": to_date},
-        )
-        return flt(result[0][0]) if result else 0.0
-
-    # ------------------------------------------------------------------
-    # Input VAT — Box 7 Standard rated expenses
-    # ------------------------------------------------------------------
-
-    def get_standard_rated_expenses():
-        result = frappe.db.sql(
-            """
-            SELECT SUM(ptc.base_tax_amount)
-            FROM `tabPurchase Taxes and Charges` ptc
-            JOIN `tabPurchase Invoice` pi ON pi.name = ptc.parent
-            WHERE pi.company = %(company)s
-              AND pi.posting_date BETWEEN %(from_date)s AND %(to_date)s
-              AND pi.docstatus = 1
-              AND ptc.charge_type != 'Actual'
-              AND ptc.rate > 0
-            """,
-            {"company": company, "from_date": from_date, "to_date": to_date},
-        )
-        return flt(result[0][0]) if result else 0.0
-
-    # ------------------------------------------------------------------
-    # Reverse charge purchases (Box 8)
-    # ------------------------------------------------------------------
-
-    def get_reverse_charge_purchases():
-        result = frappe.db.sql(
-            """
-            SELECT SUM(pi.base_net_total)
-            FROM `tabPurchase Invoice` pi
-            WHERE pi.company = %(company)s
-              AND pi.posting_date BETWEEN %(from_date)s AND %(to_date)s
-              AND pi.docstatus = 1
-              AND pi.is_reverse_charge = 1
-            """,
-            {"company": company, "from_date": from_date, "to_date": to_date},
-        )
-        return flt(result[0][0]) if result else 0.0
-
-    # ------------------------------------------------------------------
-    # Total input tax (Box 9)
-    # ------------------------------------------------------------------
-
-    def get_total_input_vat():
-        standard_input = get_standard_rated_expenses()
-        rc_purchases = get_reverse_charge_purchases()
-        rc_vat = flt(rc_purchases * 0.05)
-        return flt(standard_input + rc_vat)
-
-    # ------------------------------------------------------------------
-    # Net Sales (Box 11) and Purchases (Box 12)
-    # ------------------------------------------------------------------
-
-    def get_net_sales():
-        result = frappe.db.sql(
-            """
-            SELECT SUM(si.base_net_total)
-            FROM `tabSales Invoice` si
-            WHERE si.company = %(company)s
-              AND si.posting_date BETWEEN %(from_date)s AND %(to_date)s
-              AND si.docstatus = 1
-            """,
-            {"company": company, "from_date": from_date, "to_date": to_date},
-        )
-        return flt(result[0][0]) if result else 0.0
-
-    def get_net_purchases():
-        result = frappe.db.sql(
-            """
-            SELECT SUM(pi.base_net_total)
-            FROM `tabPurchase Invoice` pi
-            WHERE pi.company = %(company)s
-              AND pi.posting_date BETWEEN %(from_date)s AND %(to_date)s
-              AND pi.docstatus = 1
-            """,
-            {"company": company, "from_date": from_date, "to_date": to_date},
-        )
-        return flt(result[0][0]) if result else 0.0
-
-    # ------------------------------------------------------------------
-    # GCC inter-state sales / purchases (Box 13 & 14)
-    # ------------------------------------------------------------------
-
-    def get_gcc_sales():
-        gcc_countries = ("Bahrain", "Kuwait", "Oman", "Qatar", "Saudi Arabia")
-        placeholders = ", ".join([frappe.db.escape(c) for c in gcc_countries])
-        result = frappe.db.sql(
-            f"""
-            SELECT SUM(si.base_net_total)
-            FROM `tabSales Invoice` si
-            JOIN `tabAddress` addr ON addr.name = si.shipping_address_name
-            WHERE si.company = %(company)s
-              AND si.posting_date BETWEEN %(from_date)s AND %(to_date)s
-              AND si.docstatus = 1
-              AND addr.country IN ({placeholders})
-            """,
-            {"company": company, "from_date": from_date, "to_date": to_date},
-        )
-        return flt(result[0][0]) if result else 0.0
-
-    def get_gcc_purchases():
-        gcc_countries = ("Bahrain", "Kuwait", "Oman", "Qatar", "Saudi Arabia")
-        placeholders = ", ".join([frappe.db.escape(c) for c in gcc_countries])
-        result = frappe.db.sql(
-            f"""
-            SELECT SUM(pi.base_net_total)
-            FROM `tabPurchase Invoice` pi
-            JOIN `tabAddress` addr ON addr.name = pi.supplier_address
-            WHERE pi.company = %(company)s
-              AND pi.posting_date BETWEEN %(from_date)s AND %(to_date)s
-              AND pi.docstatus = 1
-              AND addr.country IN ({placeholders})
-            """,
-            {"company": company, "from_date": from_date, "to_date": to_date},
-        )
-        return flt(result[0][0]) if result else 0.0
-
-    # ------------------------------------------------------------------
-    # Compute all box values
-    # ------------------------------------------------------------------
-
-    box1a = get_taxable_sales_by_emirate("Abu Dhabi")
-    box1b = get_taxable_sales_by_emirate("Dubai")
-    box1c = get_taxable_sales_by_emirate("Sharjah")
-    box1d = get_taxable_sales_by_emirate("Ajman")
-    box1e = get_taxable_sales_by_emirate("Umm Al Quwain")
-    box1f = get_taxable_sales_by_emirate("Ras Al Khaimah")
-    box1g = get_taxable_sales_by_emirate("Fujairah")
-
-    total_emirate_sales = box1a + box1b + box1c + box1d + box1e + box1f + box1g
-    if total_emirate_sales == 0:
-        box1b = get_taxable_sales_generic()
-
-    box2  = get_reverse_charge_sales()
-    box3  = get_zero_rated_sales()
-    box4  = get_supplies_to_registered_customers()
-    box5  = get_exempt_sales()
-    box6  = get_total_output_vat()
-    box7  = get_standard_rated_expenses()
-    box8  = get_reverse_charge_purchases()
-    box9  = get_total_input_vat()
-    box10 = flt(box6 - box9)
-    box11 = get_net_sales()
-    box12 = get_net_purchases()
-    box13 = get_gcc_sales()
-    box14 = get_gcc_purchases()
-
-    # ------------------------------------------------------------------
-    # Build rows — always show AED 0.00 for zero values (never blank)
-    # ------------------------------------------------------------------
-
-    def row(box_no, description, amount, bold=False):
-        return {
-            "box": box_no,
-            "description": description,
-            "total": format_aed(amount),  # Always renders AED x,xxx.xx — never blank
-            "bold": 1 if bold else 0,
+    for emirate, amount, vat in total_emiratewise:
+        amounts_by_emirate[emirate] = {
+            "legend":          emirate,
+            "raw_amount":      flt(amount),
+            "raw_vat_amount":  flt(vat),
+            "amount":          flt(amount),
+            "vat_amount":      flt(vat),
         }
 
-    data = [
-        row("1a", _("Standard rated supplies in Abu Dhabi"),                               box1a),
-        row("1b", _("Standard rated supplies in Dubai"),                                   box1b),
-        row("1c", _("Standard rated supplies in Sharjah"),                                 box1c),
-        row("1d", _("Standard rated supplies in Ajman"),                                   box1d),
-        row("1e", _("Standard rated supplies in Umm Al Quwain"),                           box1e),
-        row("1f", _("Standard rated supplies in Ras Al Khaimah"),                          box1f),
-        row("1g", _("Standard rated supplies in Fujairah"),                                box1g),
-        row("2",  _("Supplies subject to the reverse charge provisions"),                  box2),
-        row("3",  _("Zero rated supplies"),                                                box3),
-        row("4",  _("Supplies of goods and services to registered customers outside UAE"), box4),
-        row("5",  _("Exempt supplies"),                                                    box5),
-        row("6",  _("TOTAL OUTPUT TAX DUE"),                                               box6,  bold=True),
-        row("7",  _("Standard rated expenses"),                                            box7),
-        row("8",  _("Supplies subject to the reverse charge provisions"),                  box8),
-        row("9",  _("TOTAL INPUT TAX"),                                                    box9,  bold=True),
-        row("10", _("NET VAT TO PAY (OR RECLAIM)"),                                        box10, bold=True),
-        row("11", _("Net value of sales"),                                                 box11),
-        row("12", _("Net value of purchases"),                                             box12),
-        row("13", _("Net value of sales to other GCC Member States"),                      box13),
-        row("14", _("Net value of purchases from other GCC Member States"),                box14),
-    ]
+    amounts_by_emirate = append_emiratewise_expenses(data, emirates, amounts_by_emirate)
+    return emirates, amounts_by_emirate
 
-    return data
+
+def append_emiratewise_expenses(data, emirates, amounts_by_emirate):
+    for no, emirate in enumerate(emirates, 97):
+        if emirate in amounts_by_emirate:
+            amounts_by_emirate[emirate]["no"]     = _("1{0}").format(chr(no))
+            amounts_by_emirate[emirate]["legend"] = _("Standard rated supplies in {0}").format(emirate)
+            amounts_by_emirate[emirate]["vat_rate"] = "5%"
+            data.append(amounts_by_emirate[emirate])
+        else:
+            append_data(
+                data,
+                _("1{0}").format(chr(no)),
+                _("Standard rated supplies in {0}").format(emirate),
+                0.0,
+                0.0,
+                "5%",
+            )
+    return amounts_by_emirate
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# EXPENSES SECTION
+# ─────────────────────────────────────────────────────────────────────────────
+
+def append_vat_on_expenses(data, filters):
+    append_data(data, "", _("VAT on Expenses and All Other Inputs"), None, None, "")
+
+    append_data(
+        data, "9",
+        _("Standard Rated Expenses"),
+        flt(get_standard_rated_expenses_total(filters)),
+        flt(get_standard_rated_expenses_tax(filters)),
+        "5%",
+    )
+
+    append_data(
+        data, "10",
+        _("Supplies subject to the reverse charge provision"),
+        flt(get_reverse_charge_recoverable_total(filters)),
+        flt(get_reverse_charge_recoverable_tax(filters)),
+        "5%",
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# HELPER
+# ─────────────────────────────────────────────────────────────────────────────
+
+def append_data(data, no, legend, amount, vat_amount, vat_rate=""):
+    data.append({
+        "no":         no,
+        "legend":     legend,
+        "amount":     amount,      # raw float — not frappe.format()
+        "vat_amount": vat_amount,  # raw float — not frappe.format()
+        "vat_rate":   vat_rate,
+    })
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# EMIRATEWISE TOTALS
+# FIX: VAT is stored in tabSales Taxes and Charges, NOT in
+#      tabSales Invoice Item.tax_amount (which is often 0 in v15).
+#      We join to the tax table and sum base_tax_amount per emirate.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def get_total_emiratewise(filters):
+    conditions = get_conditions(filters)
+    try:
+        return frappe.db.sql(
+            f"""
+            SELECT
+                s.vat_emirate                   AS emirate,
+                SUM(i.base_net_amount)          AS total_amount,
+                COALESCE(
+                    (
+                        SELECT SUM(stc.base_tax_amount)
+                        FROM `tabSales Taxes and Charges` stc
+                        WHERE stc.parent = s.name
+                          AND stc.charge_type != 'Actual'
+                    ), 0
+                )                               AS total_vat
+            FROM
+                `tabSales Invoice Item` i
+                INNER JOIN `tabSales Invoice` s ON i.parent = s.name
+            WHERE
+                s.docstatus = 1
+                AND i.is_exempt != 1
+                AND i.is_zero_rated != 1
+                {conditions}
+            GROUP BY
+                s.vat_emirate
+            """,
+            filters,
+        )
+    except (IndexError, TypeError):
+        return []
+
+
+def get_emirates():
+    return ["Abu Dhabi", "Dubai", "Sharjah", "Ajman", "Umm Al Quwain", "Ras Al Khaimah", "Fujairah"]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FILTER HELPERS
+# ─────────────────────────────────────────────────────────────────────────────
+
+def get_filters(filters):
+    query_filters = []
+    if filters.get("company"):
+        query_filters.append(["company", "=", filters["company"]])
+    if filters.get("from_date"):
+        query_filters.append(["posting_date", ">=", filters["from_date"]])
+    if filters.get("to_date"):
+        query_filters.append(["posting_date", "<=", filters["to_date"]])
+    return query_filters
+
+
+def get_conditions(filters):
+    conditions = ""
+    for opts in (
+        ("company",   " AND s.company=%(company)s"),
+        ("from_date", " AND s.posting_date>=%(from_date)s"),
+        ("to_date",   " AND s.posting_date<=%(to_date)s"),
+    ):
+        if filters.get(opts[0]):
+            conditions += opts[1]
+    return conditions
+
+
+def get_conditions_join(filters):
+    """Conditions for queries that join Purchase Invoice as p."""
+    conditions = ""
+    for opts in (
+        ("company",   " AND p.company=%(company)s"),
+        ("from_date", " AND p.posting_date>=%(from_date)s"),
+        ("to_date",   " AND p.posting_date<=%(to_date)s"),
+    ):
+        if filters.get(opts[0]):
+            conditions += opts[1]
+    return conditions
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# REVERSE CHARGE
+# ─────────────────────────────────────────────────────────────────────────────
+
+def get_reverse_charge_total(filters):
+    query_filters = get_filters(filters)
+    query_filters.append(["reverse_charge", "=", "Y"])
+    query_filters.append(["docstatus", "=", 1])
+    try:
+        return (
+            frappe.db.get_all(
+                "Purchase Invoice",
+                filters=query_filters,
+                fields=[{"SUM": "base_total"}],
+                as_list=True,
+                limit=1,
+            )[0][0] or 0
+        )
+    except (IndexError, TypeError):
+        return 0
+
+
+def get_reverse_charge_tax(filters):
+    """
+    FIX: Removed gl.docstatus = 1 — GL Entry has no docstatus in ERPNext v15.
+    Use gl.is_cancelled = 0 instead.
+    VAT accounts fetched from tabUAE VAT Account linked to company.
+    """
+    conditions = get_conditions_join(filters)
+    try:
+        return (
+            frappe.db.sql(
+                f"""
+                SELECT SUM(gl.debit)
+                FROM `tabPurchase Invoice` p
+                INNER JOIN `tabGL Entry` gl ON gl.voucher_no = p.name
+                WHERE
+                    p.reverse_charge = 'Y'
+                    AND p.docstatus = 1
+                    AND gl.is_cancelled = 0
+                    AND gl.account IN (
+                        SELECT account FROM `tabUAE VAT Account`
+                        WHERE parent = %(company)s
+                    )
+                    {conditions}
+                """,
+                filters,
+            )[0][0] or 0
+        )
+    except (IndexError, TypeError):
+        return 0
+
+
+def get_reverse_charge_recoverable_total(filters):
+    query_filters = get_filters(filters)
+    query_filters.append(["reverse_charge", "=", "Y"])
+    query_filters.append(["recoverable_reverse_charge", ">", "0"])
+    query_filters.append(["docstatus", "=", 1])
+    try:
+        return (
+            frappe.db.get_all(
+                "Purchase Invoice",
+                filters=query_filters,
+                fields=[{"SUM": "base_total"}],
+                as_list=True,
+                limit=1,
+            )[0][0] or 0
+        )
+    except (IndexError, TypeError):
+        return 0
+
+
+def get_reverse_charge_recoverable_tax(filters):
+    """
+    FIX: Removed gl.docstatus = 1 — not a valid field in GL Entry (ERPNext v15).
+    """
+    conditions = get_conditions_join(filters)
+    try:
+        return (
+            frappe.db.sql(
+                f"""
+                SELECT SUM(gl.debit * p.recoverable_reverse_charge / 100)
+                FROM `tabPurchase Invoice` p
+                INNER JOIN `tabGL Entry` gl ON gl.voucher_no = p.name
+                WHERE
+                    p.reverse_charge = 'Y'
+                    AND p.docstatus = 1
+                    AND p.recoverable_reverse_charge > 0
+                    AND gl.is_cancelled = 0
+                    AND gl.account IN (
+                        SELECT account FROM `tabUAE VAT Account`
+                        WHERE parent = %(company)s
+                    )
+                    {conditions}
+                """,
+                filters,
+            )[0][0] or 0
+        )
+    except (IndexError, TypeError):
+        return 0
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# STANDARD RATED EXPENSES (Purchase side input VAT)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def get_standard_rated_expenses_total(filters):
+    query_filters = get_filters(filters)
+    query_filters.append(["recoverable_standard_rated_expenses", ">", 0])
+    query_filters.append(["docstatus", "=", 1])
+    try:
+        return (
+            frappe.db.get_all(
+                "Purchase Invoice",
+                filters=query_filters,
+                fields=[{"SUM": "base_total"}],
+                as_list=True,
+                limit=1,
+            )[0][0] or 0
+        )
+    except (IndexError, TypeError):
+        return 0
+
+
+def get_standard_rated_expenses_tax(filters):
+    query_filters = get_filters(filters)
+    query_filters.append(["recoverable_standard_rated_expenses", ">", 0])
+    query_filters.append(["docstatus", "=", 1])
+    try:
+        return (
+            frappe.db.get_all(
+                "Purchase Invoice",
+                filters=query_filters,
+                fields=[{"SUM": "recoverable_standard_rated_expenses"}],
+                as_list=True,
+                limit=1,
+            )[0][0] or 0
+        )
+    except (IndexError, TypeError):
+        return 0
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TOURIST TAX RETURN
+# ─────────────────────────────────────────────────────────────────────────────
+
+def get_tourist_tax_return_total(filters):
+    query_filters = get_filters(filters)
+    query_filters.append(["tourist_tax_return", ">", 0])
+    query_filters.append(["docstatus", "=", 1])
+    try:
+        return (
+            frappe.db.get_all(
+                "Sales Invoice",
+                filters=query_filters,
+                fields=[{"SUM": "base_total"}],
+                as_list=True,
+                limit=1,
+            )[0][0] or 0
+        )
+    except (IndexError, TypeError):
+        return 0
+
+
+def get_tourist_tax_return_tax(filters):
+    query_filters = get_filters(filters)
+    query_filters.append(["tourist_tax_return", ">", 0])
+    query_filters.append(["docstatus", "=", 1])
+    try:
+        return (
+            frappe.db.get_all(
+                "Sales Invoice",
+                filters=query_filters,
+                fields=[{"SUM": "tourist_tax_return"}],
+                as_list=True,
+                limit=1,
+            )[0][0] or 0
+        )
+    except (IndexError, TypeError):
+        return 0
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ZERO RATED & EXEMPT
+# ─────────────────────────────────────────────────────────────────────────────
+
+def get_zero_rated_total(filters):
+    conditions = get_conditions(filters)
+    try:
+        return (
+            frappe.db.sql(
+                f"""
+                SELECT SUM(i.base_net_amount)
+                FROM `tabSales Invoice Item` i
+                INNER JOIN `tabSales Invoice` s ON i.parent = s.name
+                WHERE s.docstatus = 1 AND i.is_zero_rated = 1
+                {conditions}
+                """,
+                filters,
+            )[0][0] or 0
+        )
+    except (IndexError, TypeError):
+        return 0
+
+
+def get_exempt_total(filters):
+    conditions = get_conditions(filters)
+    try:
+        return (
+            frappe.db.sql(
+                f"""
+                SELECT SUM(i.base_net_amount)
+                FROM `tabSales Invoice Item` i
+                INNER JOIN `tabSales Invoice` s ON i.parent = s.name
+                WHERE s.docstatus = 1 AND i.is_exempt = 1
+                {conditions}
+                """,
+                filters,
+            )[0][0] or 0
+        )
+    except (IndexError, TypeError):
+        return 0
