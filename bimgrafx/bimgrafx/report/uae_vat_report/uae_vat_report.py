@@ -18,8 +18,9 @@ def execute(filters=None):
 
 def fmt(value):
     """
-    Always renders as 'AED x,xxx.xx' — never uses system currency symbol.
-    This bypasses ERPNext using INR/rupee symbol when system currency is INR.
+    Always renders as 'AED x,xxx.xx'.
+    Uses Data fieldtype column — bypasses ERPNext applying INR/rupee symbol
+    when system default currency is INR.
     """
     val = flt(value)
     formatted = "{:,.2f}".format(abs(val))
@@ -29,17 +30,13 @@ def fmt(value):
 
 
 def vat5(amount):
-    """
-    5% VAT on net amount.
-    Example: AED 10,16,374.39 × 5% = AED 50,818.72
-    """
+    """5% VAT on net amount. e.g. AED 10,16,374.39 × 5% = AED 50,818.72"""
     return flt(flt(amount) * 5 / 100, 2)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # COLUMNS
-# fieldtype = Data for amount columns — Currency fieldtype would apply
-# the system default currency symbol (INR/rupee) overriding AED
+# fieldtype=Data for amount columns — Currency would apply INR symbol
 # ─────────────────────────────────────────────────────────────────────────────
 
 def get_columns():
@@ -84,9 +81,8 @@ def get_data(filters=None):
 
 def append_data(data, no, legend, amount_raw, vat_raw):
     """
-    Appends one row.
-    amount_raw / vat_raw → raw floats, formatted to AED string via fmt().
-    Pass None for header/separator rows to leave the cell blank.
+    amount_raw / vat_raw = raw floats (or None for header/separator rows).
+    Formatted to AED string via fmt().
     """
     data.append({
         "no":         no,
@@ -101,14 +97,11 @@ def append_data(data, no, legend, amount_raw, vat_raw):
 # ─────────────────────────────────────────────────────────────────────────────
 
 def append_vat_on_sales(data, filters):
-    # ── Section header ────────────────────────────────────────────────────────
     append_data(data, "", _("VAT on Sales and All Other Outputs"), None, None)
 
-    # ── Rows 1a–1g: emiratewise standard rated supplies ───────────────────────
-    # VAT = 5% of net amount (calculated here — item.tax_amount is unreliable)
     emirates, amounts_by_emirate = standard_rated_expenses_emiratewise(data, filters)
 
-    # ── Row 2: Tourist tax refunds ────────────────────────────────────────────
+    # Row 2: Tourist tax refunds
     tourist_total = flt(get_tourist_tax_return_total(filters))
     tourist_tax   = flt(get_tourist_tax_return_tax(filters))
     append_data(
@@ -118,25 +111,17 @@ def append_vat_on_sales(data, filters):
         (-1) * tourist_tax,
     )
 
-    # ── Row 3: Reverse charge supplies ───────────────────────────────────────
+    # Row 3: Reverse charge supplies
     rc_total = flt(get_reverse_charge_total(filters))
     rc_tax   = flt(get_reverse_charge_tax(filters))
-    append_data(
-        data, "3",
-        _("Supplies subject to the reverse charge provision"),
-        rc_total,
-        rc_tax,
-    )
+    append_data(data, "3", _("Supplies subject to the reverse charge provision"), rc_total, rc_tax)
 
-    # ── Row 4: Zero rated — VAT is always 0 ──────────────────────────────────
-    zero_total = flt(get_zero_rated_total(filters))
-    append_data(data, "4", _("Zero Rated"), zero_total, 0.0)
+    # Row 4: Zero rated — VAT always 0
+    append_data(data, "4", _("Zero Rated"), flt(get_zero_rated_total(filters)), 0.0)
 
-    # ── Row 5: Exempt — VAT is always 0 ──────────────────────────────────────
-    exempt_total = flt(get_exempt_total(filters))
-    append_data(data, "5", _("Exempt Supplies"), exempt_total, 0.0)
+    # Row 5: Exempt — VAT always 0
+    append_data(data, "5", _("Exempt Supplies"), flt(get_exempt_total(filters)), 0.0)
 
-    # ── Blank separator ───────────────────────────────────────────────────────
     append_data(data, "", "", None, None)
 
     return emirates, amounts_by_emirate
@@ -144,21 +129,19 @@ def append_vat_on_sales(data, filters):
 
 def standard_rated_expenses_emiratewise(data, filters):
     """
-    Builds rows 1a–1g.
-    Amount  = sum of base_net_amount per emirate from Sales Invoice Items.
-    VAT     = 5% of that amount (calculated in Python, not from item.tax_amount
-              which is often 0 in ERPNext v15).
+    Rows 1a–1g.
+    Amount = base_net_amount per emirate.
+    VAT    = 5% of amount (calculated in Python — item.tax_amount is 0 in v15).
     """
-    total_emiratewise = get_total_emiratewise(filters)
-    emirates          = get_emirates()
+    total_emiratewise  = get_total_emiratewise(filters)
+    emirates           = get_emirates()
     amounts_by_emirate = {}
 
     for emirate, amount in total_emiratewise:
         net = flt(amount)
-        vat = vat5(net)                  # ← 5% calculated here
         amounts_by_emirate[emirate] = {
             "raw_amount":     net,
-            "raw_vat_amount": vat,
+            "raw_vat_amount": vat5(net),
         }
 
     for no, emirate in enumerate(emirates, 97):
@@ -176,7 +159,6 @@ def standard_rated_expenses_emiratewise(data, filters):
             })
             data.append(amounts_by_emirate[emirate])
         else:
-            # Emirate has no invoices — show AED 0.00
             append_data(data, box_no, legend, 0.0, 0.0)
 
     return emirates, amounts_by_emirate
@@ -187,28 +169,23 @@ def standard_rated_expenses_emiratewise(data, filters):
 # ─────────────────────────────────────────────────────────────────────────────
 
 def append_vat_on_expenses(data, filters):
-    # ── Section header ────────────────────────────────────────────────────────
     append_data(data, "", _("VAT on Expenses and All Other Inputs"), None, None)
 
-    # ── Row 9: Standard rated expenses ───────────────────────────────────────
-    std_total = flt(get_standard_rated_expenses_total(filters))
-    std_tax   = flt(get_standard_rated_expenses_tax(filters))
-    append_data(data, "9", _("Standard Rated Expenses"), std_total, std_tax)
-
-    # ── Row 10: Recoverable reverse charge ───────────────────────────────────
-    rc_rec_total = flt(get_reverse_charge_recoverable_total(filters))
-    rc_rec_tax   = flt(get_reverse_charge_recoverable_tax(filters))
     append_data(
-        data, "10",
-        _("Supplies subject to the reverse charge provision"),
-        rc_rec_total,
-        rc_rec_tax,
+        data, "9", _("Standard Rated Expenses"),
+        flt(get_standard_rated_expenses_total(filters)),
+        flt(get_standard_rated_expenses_tax(filters)),
+    )
+
+    append_data(
+        data, "10", _("Supplies subject to the reverse charge provision"),
+        flt(get_reverse_charge_recoverable_total(filters)),
+        flt(get_reverse_charge_recoverable_tax(filters)),
     )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # EMIRATEWISE QUERY
-# Returns (emirate, net_amount) — only 2 columns now, VAT done in Python
 # ─────────────────────────────────────────────────────────────────────────────
 
 def get_total_emiratewise(filters):
@@ -223,7 +200,7 @@ def get_total_emiratewise(filters):
                 `tabSales Invoice Item` i
                 INNER JOIN `tabSales Invoice` s ON i.parent = s.name
             WHERE
-                s.docstatus      = 1
+                s.docstatus       = 1
                 AND i.is_exempt    != 1
                 AND i.is_zero_rated != 1
                 {conditions}
@@ -247,24 +224,8 @@ def get_emirates():
 # FILTER BUILDERS
 # ─────────────────────────────────────────────────────────────────────────────
 
-def get_filters(filters):
-    """
-    FIX: Original code checked from_date twice and never checked to_date,
-    so the to_date filter was silently ignored — causing all-time totals
-    regardless of the date range selected.
-    """
-    query_filters = []
-    if filters.get("company"):
-        query_filters.append(["company", "=", filters["company"]])
-    if filters.get("from_date"):
-        query_filters.append(["posting_date", ">=", filters["from_date"]])
-    if filters.get("to_date"):                  # ← was: if filters.get("from_date") — BUG
-        query_filters.append(["posting_date", "<=", filters["to_date"]])
-    return query_filters
-
-
 def get_conditions(filters):
-    """SQL conditions for queries aliasing Sales Invoice as s."""
+    """SQL conditions — Sales Invoice aliased as s."""
     conditions = ""
     for field, sql in (
         ("company",   " AND s.company=%(company)s"),
@@ -276,8 +237,8 @@ def get_conditions(filters):
     return conditions
 
 
-def get_conditions_join(filters):
-    """SQL conditions for queries aliasing Purchase Invoice as p."""
+def get_conditions_pi(filters):
+    """SQL conditions — Purchase Invoice aliased as p."""
     conditions = ""
     for field, sql in (
         ("company",   " AND p.company=%(company)s"),
@@ -289,23 +250,39 @@ def get_conditions_join(filters):
     return conditions
 
 
+def get_conditions_bare(filters):
+    """SQL conditions — no table alias (single-table queries)."""
+    conditions = ""
+    for field, sql in (
+        ("company",   " AND company=%(company)s"),
+        ("from_date", " AND posting_date>=%(from_date)s"),
+        ("to_date",   " AND posting_date<=%(to_date)s"),
+    ):
+        if filters.get(field):
+            conditions += sql
+    return conditions
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # REVERSE CHARGE
+# FIX: replaced frappe.db.get_all(fields=[{"SUM":...}]) — broken in v15.104
+#      with frappe.db.sql() raw queries throughout
 # ─────────────────────────────────────────────────────────────────────────────
 
 def get_reverse_charge_total(filters):
-    query_filters = get_filters(filters)
-    query_filters.append(["reverse_charge", "=", "Y"])
-    query_filters.append(["docstatus", "=", 1])
+    conditions = get_conditions_bare(filters)
     try:
-        return (
-            frappe.db.get_all(
-                "Purchase Invoice",
-                filters=query_filters,
-                fields=[{"SUM": "base_total"}],
-                as_list=True,
-                limit=1,
-            )[0][0] or 0
+        return flt(
+            frappe.db.sql(
+                f"""
+                SELECT SUM(base_total)
+                FROM `tabPurchase Invoice`
+                WHERE reverse_charge = 'Y'
+                  AND docstatus = 1
+                  {conditions}
+                """,
+                filters,
+            )[0][0]
         )
     except (IndexError, TypeError):
         return 0
@@ -314,11 +291,10 @@ def get_reverse_charge_total(filters):
 def get_reverse_charge_tax(filters):
     """
     FIX: gl.docstatus = 1 removed — GL Entry has no docstatus in ERPNext v15.
-    Replaced with gl.is_cancelled = 0.
     """
-    conditions = get_conditions_join(filters)
+    conditions = get_conditions_pi(filters)
     try:
-        return (
+        return flt(
             frappe.db.sql(
                 f"""
                 SELECT SUM(gl.debit)
@@ -335,38 +311,37 @@ def get_reverse_charge_tax(filters):
                     {conditions}
                 """,
                 filters,
-            )[0][0] or 0
+            )[0][0]
         )
     except (IndexError, TypeError):
         return 0
 
 
 def get_reverse_charge_recoverable_total(filters):
-    query_filters = get_filters(filters)
-    query_filters.append(["reverse_charge", "=", "Y"])
-    query_filters.append(["recoverable_reverse_charge", ">", "0"])
-    query_filters.append(["docstatus", "=", 1])
+    conditions = get_conditions_bare(filters)
     try:
-        return (
-            frappe.db.get_all(
-                "Purchase Invoice",
-                filters=query_filters,
-                fields=[{"SUM": "base_total"}],
-                as_list=True,
-                limit=1,
-            )[0][0] or 0
+        return flt(
+            frappe.db.sql(
+                f"""
+                SELECT SUM(base_total)
+                FROM `tabPurchase Invoice`
+                WHERE reverse_charge = 'Y'
+                  AND recoverable_reverse_charge > 0
+                  AND docstatus = 1
+                  {conditions}
+                """,
+                filters,
+            )[0][0]
         )
     except (IndexError, TypeError):
         return 0
 
 
 def get_reverse_charge_recoverable_tax(filters):
-    """
-    FIX: gl.docstatus = 1 removed — not valid in ERPNext v15.
-    """
-    conditions = get_conditions_join(filters)
+    """FIX: gl.docstatus = 1 removed — not valid in ERPNext v15."""
+    conditions = get_conditions_pi(filters)
     try:
-        return (
+        return flt(
             frappe.db.sql(
                 f"""
                 SELECT SUM(gl.debit * p.recoverable_reverse_charge / 100)
@@ -384,7 +359,7 @@ def get_reverse_charge_recoverable_tax(filters):
                     {conditions}
                 """,
                 filters,
-            )[0][0] or 0
+            )[0][0]
         )
     except (IndexError, TypeError):
         return 0
@@ -395,36 +370,38 @@ def get_reverse_charge_recoverable_tax(filters):
 # ─────────────────────────────────────────────────────────────────────────────
 
 def get_standard_rated_expenses_total(filters):
-    query_filters = get_filters(filters)
-    query_filters.append(["recoverable_standard_rated_expenses", ">", 0])
-    query_filters.append(["docstatus", "=", 1])
+    conditions = get_conditions_bare(filters)
     try:
-        return (
-            frappe.db.get_all(
-                "Purchase Invoice",
-                filters=query_filters,
-                fields=[{"SUM": "base_total"}],
-                as_list=True,
-                limit=1,
-            )[0][0] or 0
+        return flt(
+            frappe.db.sql(
+                f"""
+                SELECT SUM(base_total)
+                FROM `tabPurchase Invoice`
+                WHERE recoverable_standard_rated_expenses > 0
+                  AND docstatus = 1
+                  {conditions}
+                """,
+                filters,
+            )[0][0]
         )
     except (IndexError, TypeError):
         return 0
 
 
 def get_standard_rated_expenses_tax(filters):
-    query_filters = get_filters(filters)
-    query_filters.append(["recoverable_standard_rated_expenses", ">", 0])
-    query_filters.append(["docstatus", "=", 1])
+    conditions = get_conditions_bare(filters)
     try:
-        return (
-            frappe.db.get_all(
-                "Purchase Invoice",
-                filters=query_filters,
-                fields=[{"SUM": "recoverable_standard_rated_expenses"}],
-                as_list=True,
-                limit=1,
-            )[0][0] or 0
+        return flt(
+            frappe.db.sql(
+                f"""
+                SELECT SUM(recoverable_standard_rated_expenses)
+                FROM `tabPurchase Invoice`
+                WHERE recoverable_standard_rated_expenses > 0
+                  AND docstatus = 1
+                  {conditions}
+                """,
+                filters,
+            )[0][0]
         )
     except (IndexError, TypeError):
         return 0
@@ -435,36 +412,38 @@ def get_standard_rated_expenses_tax(filters):
 # ─────────────────────────────────────────────────────────────────────────────
 
 def get_tourist_tax_return_total(filters):
-    query_filters = get_filters(filters)
-    query_filters.append(["tourist_tax_return", ">", 0])
-    query_filters.append(["docstatus", "=", 1])
+    conditions = get_conditions_bare(filters)
     try:
-        return (
-            frappe.db.get_all(
-                "Sales Invoice",
-                filters=query_filters,
-                fields=[{"SUM": "base_total"}],
-                as_list=True,
-                limit=1,
-            )[0][0] or 0
+        return flt(
+            frappe.db.sql(
+                f"""
+                SELECT SUM(base_total)
+                FROM `tabSales Invoice`
+                WHERE tourist_tax_return > 0
+                  AND docstatus = 1
+                  {conditions}
+                """,
+                filters,
+            )[0][0]
         )
     except (IndexError, TypeError):
         return 0
 
 
 def get_tourist_tax_return_tax(filters):
-    query_filters = get_filters(filters)
-    query_filters.append(["tourist_tax_return", ">", 0])
-    query_filters.append(["docstatus", "=", 1])
+    conditions = get_conditions_bare(filters)
     try:
-        return (
-            frappe.db.get_all(
-                "Sales Invoice",
-                filters=query_filters,
-                fields=[{"SUM": "tourist_tax_return"}],
-                as_list=True,
-                limit=1,
-            )[0][0] or 0
+        return flt(
+            frappe.db.sql(
+                f"""
+                SELECT SUM(tourist_tax_return)
+                FROM `tabSales Invoice`
+                WHERE tourist_tax_return > 0
+                  AND docstatus = 1
+                  {conditions}
+                """,
+                filters,
+            )[0][0]
         )
     except (IndexError, TypeError):
         return 0
@@ -477,7 +456,7 @@ def get_tourist_tax_return_tax(filters):
 def get_zero_rated_total(filters):
     conditions = get_conditions(filters)
     try:
-        return (
+        return flt(
             frappe.db.sql(
                 f"""
                 SELECT SUM(i.base_net_amount)
@@ -487,7 +466,7 @@ def get_zero_rated_total(filters):
                 {conditions}
                 """,
                 filters,
-            )[0][0] or 0
+            )[0][0]
         )
     except (IndexError, TypeError):
         return 0
@@ -496,7 +475,7 @@ def get_zero_rated_total(filters):
 def get_exempt_total(filters):
     conditions = get_conditions(filters)
     try:
-        return (
+        return flt(
             frappe.db.sql(
                 f"""
                 SELECT SUM(i.base_net_amount)
@@ -506,7 +485,7 @@ def get_exempt_total(filters):
                 {conditions}
                 """,
                 filters,
-            )[0][0] or 0
+            )[0][0]
         )
     except (IndexError, TypeError):
         return 0
