@@ -5,6 +5,15 @@ import frappe
 from frappe import _
 
 
+def fmt_aed(value):
+	"""Format a number as AED currency string — avoids picking up system default currency symbol."""
+	if value in ("", None):
+		return ""
+	try:
+		return f"AED {float(value):,.2f}"
+	except (ValueError, TypeError):
+		return value
+
 def execute(filters=None):
 	columns = get_columns()
 	data, emirates, amounts_by_emirate = get_data(filters)
@@ -14,10 +23,10 @@ def execute(filters=None):
 def get_columns():
 	"""Creates a list of dictionaries that are used to generate column headers of the data table."""
 	return [
-		{"fieldname": "no",         "label": _("No"),               "fieldtype": "Data",     "width": 50},
-		{"fieldname": "legend",     "label": _("Legend"),           "fieldtype": "Data",     "width": 300},
-		{"fieldname": "amount",     "label": _("Amount (AED)"),     "fieldtype": "Currency", "width": 125},
-		{"fieldname": "vat_amount", "label": _("VAT Amount (AED)"), "fieldtype": "Currency", "width": 150},
+		{"fieldname": "no",         "label": _("No"),               "fieldtype": "Data", "width": 50},
+		{"fieldname": "legend",     "label": _("Legend"),           "fieldtype": "Data", "width": 300},
+		{"fieldname": "amount",     "label": _("Amount (AED)"),     "fieldtype": "Data", "width": 150},
+		{"fieldname": "vat_amount", "label": _("VAT Amount (AED)"), "fieldtype": "Data", "width": 150},
 	]
 
 
@@ -43,35 +52,35 @@ def append_vat_on_sales(data, filters):
 	append_data(
 		data, "1",
 		_("Total Standard Rated Supplies (1a to 1g)"),
-		frappe.format(total_amount, "Currency"),
-		frappe.format(total_vat,    "Currency"),
+		fmt_aed(total_amount),
+		fmt_aed(total_vat),
 	)
 
 	append_data(
 		data, "2",
 		_("Tax Refunds provided to Tourists under the Tax Refunds for Tourists Scheme"),
-		frappe.format((-1) * get_tourist_tax_return_total(filters), "Currency"),
-		frappe.format((-1) * get_tourist_tax_return_tax(filters),   "Currency"),
+		fmt_aed((-1) * get_tourist_tax_return_total(filters)),
+		fmt_aed((-1) * get_tourist_tax_return_tax(filters)),
 	)
 
 	append_data(
 		data, "3",
 		_("Supplies subject to the reverse charge provision"),
-		frappe.format(get_reverse_charge_total(filters), "Currency"),
-		frappe.format(get_reverse_charge_tax(filters),   "Currency"),
+		fmt_aed(get_reverse_charge_total(filters)),
+		fmt_aed(get_reverse_charge_tax(filters)),
 	)
 
 	append_data(
 		data, "4",
 		_("Zero Rated"),
-		frappe.format(get_zero_rated_total(filters), "Currency"),
+		fmt_aed(get_zero_rated_total(filters)),
 		"-",
 	)
 
 	append_data(
 		data, "5",
 		_("Exempt Supplies"),
-		frappe.format(get_exempt_total(filters), "Currency"),
+		fmt_aed(get_exempt_total(filters)),
 		"-",
 	)
 
@@ -90,8 +99,8 @@ def standard_rated_expenses_emiratewise(data, filters):
 			"legend":         emirate,
 			"raw_amount":     amount or 0,
 			"raw_vat_amount": vat    or 0,
-			"amount":         frappe.format(amount or 0, "Currency"),
-			"vat_amount":     frappe.format(vat    or 0, "Currency"),
+			"amount":         fmt_aed(amount or 0),
+			"vat_amount":     fmt_aed(vat    or 0),
 		}
 
 	amounts_by_emirate = append_emiratewise_expenses(data, emirates, amounts_by_emirate)
@@ -110,8 +119,8 @@ def append_emiratewise_expenses(data, emirates, amounts_by_emirate):
 		else:
 			append_data(
 				data, row_no, label,
-				frappe.format(0, "Currency"),
-				frappe.format(0, "Currency"),
+				fmt_aed(0),
+				fmt_aed(0),
 			)
 	return amounts_by_emirate
 
@@ -122,14 +131,14 @@ def append_vat_on_expenses(data, filters):
 	append_data(
 		data, "9",
 		_("Standard Rated Expenses"),
-		frappe.format(get_standard_rated_expenses_total(filters), "Currency"),
-		frappe.format(get_standard_rated_expenses_tax(filters),   "Currency"),
+		fmt_aed(get_standard_rated_expenses_total(filters)),
+		fmt_aed(get_standard_rated_expenses_tax(filters)),
 	)
 	append_data(
 		data, "10",
 		_("Supplies subject to the reverse charge provision"),
-		frappe.format(get_reverse_charge_recoverable_total(filters), "Currency"),
-		frappe.format(get_reverse_charge_recoverable_tax(filters),   "Currency"),
+		fmt_aed(get_reverse_charge_recoverable_total(filters)),
+		fmt_aed(get_reverse_charge_recoverable_tax(filters)),
 	)
 
 
