@@ -185,21 +185,6 @@ def get_emirates():
 	        "Umm Al Quwain", "Ras Al Khaimah", "Fujairah"]
 
 
-def get_filters(filters):
-	"""
-	Build ORM-style filter list.
-	FIX: original checked `from_date` twice — second condition now correctly
-	     checks `to_date` before appending the <= clause.
-	"""
-	query_filters = []
-	if filters.get("company"):
-		query_filters.append(["company", "=", filters["company"]])
-	if filters.get("from_date"):
-		query_filters.append(["posting_date", ">=", filters["from_date"]])
-	if filters.get("to_date"):                                          # ← was from_date (bug)
-		query_filters.append(["posting_date", "<=", filters["to_date"]])
-	return query_filters
-
 
 def get_conditions(filters):
 	"""
@@ -245,14 +230,18 @@ def get_conditions_join(filters):
 
 def get_reverse_charge_total(filters):
 	"""Returns the sum of the total of each Purchase invoice with reverse charge."""
-	query_filters = get_filters(filters)
-	query_filters.append(["reverse_charge", "=", "Y"])
-	query_filters.append(["docstatus", "=", 1])
+	conditions = get_conditions_with_alias(filters, "p")
 	try:
 		return (
-			frappe.db.get_all(
-				"Purchase Invoice", filters=query_filters,
-				fields=[{"SUM": "base_total"}], as_list=True, limit=1,
+			frappe.db.sql(
+				f"""
+				SELECT SUM(p.base_total)
+				FROM `tabPurchase Invoice` p
+				WHERE p.reverse_charge = "Y"
+				  AND p.docstatus = 1
+				  {conditions}
+				""",
+				filters,
 			)[0][0] or 0
 		)
 	except (IndexError, TypeError):
@@ -283,15 +272,19 @@ def get_reverse_charge_tax(filters):
 
 def get_reverse_charge_recoverable_total(filters):
 	"""Returns the total of Purchase invoices with recoverable reverse charge."""
-	query_filters = get_filters(filters)
-	query_filters.append(["reverse_charge", "=", "Y"])
-	query_filters.append(["recoverable_reverse_charge", ">", "0"])
-	query_filters.append(["docstatus", "=", 1])
+	conditions = get_conditions_with_alias(filters, "p")
 	try:
 		return (
-			frappe.db.get_all(
-				"Purchase Invoice", filters=query_filters,
-				fields=[{"SUM": "base_total"}], as_list=True, limit=1,
+			frappe.db.sql(
+				f"""
+				SELECT SUM(p.base_total)
+				FROM `tabPurchase Invoice` p
+				WHERE p.reverse_charge = "Y"
+				  AND p.recoverable_reverse_charge > 0
+				  AND p.docstatus = 1
+				  {conditions}
+				""",
+				filters,
 			)[0][0] or 0
 		)
 	except (IndexError, TypeError):
@@ -325,14 +318,18 @@ def get_reverse_charge_recoverable_tax(filters):
 # ── Standard Rated Expenses ────────────────────────────────────────────────────
 
 def get_standard_rated_expenses_total(filters):
-	query_filters = get_filters(filters)
-	query_filters.append(["recoverable_standard_rated_expenses", ">", 0])
-	query_filters.append(["docstatus", "=", 1])
+	conditions = get_conditions_with_alias(filters, "p")
 	try:
 		return (
-			frappe.db.get_all(
-				"Purchase Invoice", filters=query_filters,
-				fields=[{"SUM": "base_total"}], as_list=True, limit=1,
+			frappe.db.sql(
+				f"""
+				SELECT SUM(p.base_total)
+				FROM `tabPurchase Invoice` p
+				WHERE p.recoverable_standard_rated_expenses > 0
+				  AND p.docstatus = 1
+				  {conditions}
+				""",
+				filters,
 			)[0][0] or 0
 		)
 	except (IndexError, TypeError):
@@ -340,15 +337,18 @@ def get_standard_rated_expenses_total(filters):
 
 
 def get_standard_rated_expenses_tax(filters):
-	query_filters = get_filters(filters)
-	query_filters.append(["recoverable_standard_rated_expenses", ">", 0])
-	query_filters.append(["docstatus", "=", 1])
+	conditions = get_conditions_with_alias(filters, "p")
 	try:
 		return (
-			frappe.db.get_all(
-				"Purchase Invoice", filters=query_filters,
-				fields=[{"SUM": "recoverable_standard_rated_expenses"}],
-				as_list=True, limit=1,
+			frappe.db.sql(
+				f"""
+				SELECT SUM(p.recoverable_standard_rated_expenses)
+				FROM `tabPurchase Invoice` p
+				WHERE p.recoverable_standard_rated_expenses > 0
+				  AND p.docstatus = 1
+				  {conditions}
+				""",
+				filters,
 			)[0][0] or 0
 		)
 	except (IndexError, TypeError):
@@ -358,14 +358,18 @@ def get_standard_rated_expenses_tax(filters):
 # ── Tourist Tax Return ─────────────────────────────────────────────────────────
 
 def get_tourist_tax_return_total(filters):
-	query_filters = get_filters(filters)
-	query_filters.append(["tourist_tax_return", ">", 0])
-	query_filters.append(["docstatus", "=", 1])
+	conditions = get_conditions_with_alias(filters, "s")
 	try:
 		return (
-			frappe.db.get_all(
-				"Sales Invoice", filters=query_filters,
-				fields=[{"SUM": "base_total"}], as_list=True, limit=1,
+			frappe.db.sql(
+				f"""
+				SELECT SUM(s.base_total)
+				FROM `tabSales Invoice` s
+				WHERE s.tourist_tax_return > 0
+				  AND s.docstatus = 1
+				  {conditions}
+				""",
+				filters,
 			)[0][0] or 0
 		)
 	except (IndexError, TypeError):
@@ -373,15 +377,18 @@ def get_tourist_tax_return_total(filters):
 
 
 def get_tourist_tax_return_tax(filters):
-	query_filters = get_filters(filters)
-	query_filters.append(["tourist_tax_return", ">", 0])
-	query_filters.append(["docstatus", "=", 1])
+	conditions = get_conditions_with_alias(filters, "s")
 	try:
 		return (
-			frappe.db.get_all(
-				"Sales Invoice", filters=query_filters,
-				fields=[{"SUM": "tourist_tax_return"}],
-				as_list=True, limit=1,
+			frappe.db.sql(
+				f"""
+				SELECT SUM(s.tourist_tax_return)
+				FROM `tabSales Invoice` s
+				WHERE s.tourist_tax_return > 0
+				  AND s.docstatus = 1
+				  {conditions}
+				""",
+				filters,
 			)[0][0] or 0
 		)
 	except (IndexError, TypeError):
