@@ -120,7 +120,7 @@ app_include_js = "/assets/bimgrafx/js/common_script.js"
 
 override_doctype_class = {
     "Employee Onboarding": "bimgrafx.overrides.employee_boarding_controller.CustomEmployeeBoardingController",
-	"Employee Separation": "bimgrafx.overrides.employee_separation.EmployeeSeparation",
+	"Employee Separation": "bimgrafx.overrides.employee_separation.CustomEmployeeSeparation"
 }
 
 # Document Events
