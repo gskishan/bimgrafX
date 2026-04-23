@@ -89,21 +89,25 @@ def get_no_of_pages(filters=None, txt=None, page_length=20):
 
 
 def get_all_filters(filters=None):
-	job_openings = frappe.get_all(
-		"Job Opening",
-		filters={"publish": 1, "status": "Open"},
-		fields=["company", "department", "employment_type", "location"],
-	)
+    job_openings = frappe.get_all(
+        "Job Opening",
+        filters={"publish": 1, "status": "Open"},
+        fields=["company", "department", "employment_type", "location"],
+    )
+    companies = filters.get("company", [])
+    all_filters = {}
+    for opening in job_openings:
+        for key, value in opening.items():
+            if value and (key == "company" or not companies or opening.company in companies):
+                all_filters.setdefault(key, set()).add(value)
 
-	companies = filters.get("company", [])
-
-	all_filters = {}
-	for opening in job_openings:
-		for key, value in opening.items():
-			if value and (key == "company" or not companies or opening.company in companies):
-				all_filters.setdefault(key, set()).add(value)
-
-	return {key: sorted(value) for key, value in all_filters.items()}
+    # Define desired order: company first, then others
+    ordered_keys = ["company", "department", "employment_type", "location"]
+    return {
+        key: sorted(all_filters[key])
+        for key in ordered_keys
+        if key in all_filters
+    }
 
 
 def get_filters_txt_sort_offset(page_len=20):
