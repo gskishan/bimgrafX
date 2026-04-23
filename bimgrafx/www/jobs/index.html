@@ -18,7 +18,7 @@
 		<hr class="mb-6" />
 
 		{% for name, values in all_filters.items() %}
-		<div class="mb-6 {% if name.title() == 'Company' and frappe.session.user != 'Administrator' %}d-none{% endif %}">
+		<div class="mb-6">
     
 
 			<p class="font-weight-bold mb-4">
@@ -317,7 +317,7 @@
 
 		<div class="px-6 pt-6 flex-grow-1 overflow-auto">
 			{% for name, values in all_filters.items() %}
-			<div class="mb-6 {% if name.title() == 'Company' and frappe.session.user != 'Administrator' %}d-none{% endif %}">
+			<div class="mb-6">
 
 
 				<p class="font-weight-bold mb-4">
