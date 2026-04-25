@@ -128,12 +128,11 @@ def get_data(filters):
             si.grand_total,
             si.outstanding_amount,
             si.posting_date AS invoice_date,
-            c.default_currency AS currency,
+            si.currency AS currency,          -- ✅ invoice transaction currency, NOT company default
             pe.name AS payment_entry,
             pe.posting_date AS payment_date,
             IFNULL(per.allocated_amount, 0) AS allocated_amount
         FROM `tabSales Invoice` si
-        LEFT JOIN `tabCompany` c ON c.name = si.company
         LEFT JOIN `tabPayment Entry Reference` per
             ON per.reference_name = si.name
             AND per.reference_doctype = 'Sales Invoice'
@@ -237,13 +236,13 @@ def get_data(filters):
             cust_paid_amount += paid_amount
             cust_outstanding += outstanding
 
-        # ✅ Customer header row — use explicitly tracked currency
+        # ✅ Customer header row
         data.insert(start_index, {
             "name": "",
             "customer": cust,
             "company": "",
             "posting_date": "",
-            "currency": cust_currency,          # ✅ correct currency per customer
+            "currency": cust_currency,       # ✅ invoice transaction currency
             "invoice_value": None,
             "paid_amount": None,
             "outstanding_amount": None,
