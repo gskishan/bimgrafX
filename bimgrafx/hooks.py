@@ -138,6 +138,12 @@ override_doctype_class = {
 # Scheduled Tasks
 # ---------------
 
+scheduler_events = {
+    "daily": [
+        "bimgrafx.api.send_birthday_reminder",
+    ]
+}
+
 # scheduler_events = {
 # 	"all": [
 # 		"bimgrafx.tasks.all"
