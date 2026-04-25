@@ -69,8 +69,6 @@ def get_columns():
             "options": "currency",
             "width": 170,
         },
-
-        # ✅ NEW (display only, NOT summed)
         {
             "label": "Customer Total",
             "fieldname": "customer_total",
@@ -78,7 +76,6 @@ def get_columns():
             "options": "currency",
             "width": 150,
         },
-
         {
             "label": "Payment Status",
             "fieldname": "payment_status",
@@ -177,6 +174,7 @@ def get_data(filters):
         cust_invoice_value = 0
         cust_paid_amount = 0
         cust_outstanding = 0
+        cust_currency = None  # ✅ track currency per customer
 
         start_index = len(data)
 
@@ -187,6 +185,9 @@ def get_data(filters):
             outstanding = flt(meta.outstanding_amount)
             paid_amount = sum(flt(p.allocated_amount) for p in payments)
             grand_total = flt(meta.grand_total)
+
+            if cust_currency is None:
+                cust_currency = meta.currency  # ✅ capture from first invoice
 
             if outstanding <= 0:
                 payment_status = "Paid"
@@ -209,6 +210,7 @@ def get_data(filters):
                 "outstanding_amount": outstanding,
                 "customer_total": None,
                 "payment_status": payment_status,
+                "ageing_days": ageing_days,
                 "indent": 1,
             })
 
@@ -227,6 +229,7 @@ def get_data(filters):
                     "payment_status": "Payment",
                     "payment_entry": pmt.payment_entry,
                     "payment_date": pmt.payment_date,
+                    "ageing_days": None,
                     "indent": 2,
                 })
 
@@ -234,23 +237,19 @@ def get_data(filters):
             cust_paid_amount += paid_amount
             cust_outstanding += outstanding
 
-        # ✅ Customer row (IMPORTANT FIX)
+        # ✅ Customer header row — use explicitly tracked currency
         data.insert(start_index, {
             "name": "",
             "customer": cust,
             "company": "",
             "posting_date": "",
-            "currency": meta.currency,
-
-            # ❌ DO NOT PUT TOTALS HERE
+            "currency": cust_currency,          # ✅ correct currency per customer
             "invoice_value": None,
             "paid_amount": None,
             "outstanding_amount": None,
-
-            # ✅ SHOW HERE INSTEAD
             "customer_total": cust_invoice_value,
-
             "payment_status": "",
+            "ageing_days": None,
             "indent": 0,
             "bold": 1,
         })
