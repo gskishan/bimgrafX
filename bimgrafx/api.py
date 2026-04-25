@@ -28,7 +28,7 @@ def get_hr_managers():
     return emails
 
 
-def send_birthday_reminder():
+def send_birthday_reminder_hr():
     # Get today's birthdays
     report_data = frappe.get_all(
         "Employee",
