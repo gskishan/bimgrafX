@@ -1,5 +1,5 @@
 # Copyright (c) 2013, Frappe Technologies Pvt. Ltd.
-# License: MIT
+# For license information, please see license.txt
 
 import frappe
 from frappe import _
@@ -15,13 +15,12 @@ def execute(filters=None):
 def get_data(filters):
     data = []
 
-    company_currency = frappe.get_cached_value("Company", filters.get("company"), "default_currency")
-
+    # Get depreciation accounts
     depreciation_accounts = frappe.db.sql_list(
-        """ SELECT name FROM tabAccount
-        WHERE IFNULL(account_type, '') = 'Depreciation' """
+        """SELECT name FROM tabAccount WHERE IFNULL(account_type, '') = 'Depreciation' """
     )
 
+    # Base filters
     filters_data = [
         ["company", "=", filters.get("company")],
         ["posting_date", ">=", filters.get("from_date")],
@@ -31,39 +30,48 @@ def get_data(filters):
         ["is_cancelled", "=", 0],
     ]
 
+    # Filter by asset
     if filters.get("asset"):
         filters_data.append(["against_voucher", "=", filters.get("asset")])
 
+    # Filter by asset category
     if filters.get("asset_category"):
         assets = frappe.db.sql_list(
-            """SELECT name FROM tabAsset
-            WHERE asset_category = %s AND docstatus = 1""",
+            """SELECT name FROM tabAsset 
+               WHERE asset_category = %s AND docstatus = 1""",
             filters.get("asset_category"),
         )
         filters_data.append(["against_voucher", "in", assets])
 
+    # Finance book logic
     company_fb = frappe.get_cached_value("Company", filters.get("company"), "default_finance_book")
 
     if filters.get("include_default_book_assets") and company_fb:
         if filters.get("finance_book") and cstr(filters.get("finance_book")) != cstr(company_fb):
-            frappe.throw(_("To use a different finance book, uncheck 'Include Default FB Assets'"))
-        else:
-            finance_book = company_fb
-    elif filters.get("finance_book"):
-        finance_book = filters.get("finance_book")
+            frappe.throw(_("To use a different finance book, please uncheck 'Include Default FB Assets'"))
+        finance_book = company_fb
     else:
-        finance_book = None
+        finance_book = filters.get("finance_book")
 
     if finance_book:
-        or_filters_data = [["finance_book", "in", ["", finance_book]], ["finance_book", "is", "not set"]]
+        or_filters_data = [
+            ["finance_book", "in", ["", finance_book]],
+            ["finance_book", "is", "not set"],
+        ]
     else:
         or_filters_data = [["finance_book", "in", [""]], ["finance_book", "is", "not set"]]
 
+    # Fetch GL entries
     gl_entries = frappe.get_all(
         "GL Entry",
         filters=filters_data,
         or_filters=or_filters_data,
-        fields=["against_voucher", "debit_in_account_currency as debit", "voucher_no", "posting_date"],
+        fields=[
+            "against_voucher",
+            "debit_in_account_currency as debit",
+            "voucher_no",
+            "posting_date",
+        ],
         order_by="against_voucher, posting_date",
     )
 
@@ -77,28 +85,13 @@ def get_data(filters):
         asset_data = assets_details.get(d.against_voucher)
 
         if asset_data:
+            # Calculate accumulated depreciation (dynamic)
             if not asset_data.get("accumulated_depreciation_amount"):
-                AssetDepreciationSchedule = DocType("Asset Depreciation Schedule")
-                DepreciationSchedule = DocType("Depreciation Schedule")
-
-                query = (
-                    frappe.qb.from_(DepreciationSchedule)
-                    .join(AssetDepreciationSchedule)
-                    .on(DepreciationSchedule.parent == AssetDepreciationSchedule.name)
-                    .select(DepreciationSchedule.accumulated_depreciation_amount)
-                    .where(
-                        (AssetDepreciationSchedule.asset == d.against_voucher)
-                        & (DepreciationSchedule.parenttype == "Asset Depreciation Schedule")
-                        & (DepreciationSchedule.schedule_date == d.posting_date)
-                    )
-                ).run(as_dict=True)
-
-                asset_data.accumulated_depreciation_amount = (
-                    query[0]["accumulated_depreciation_amount"] if query else 0
-                )
+                asset_data.accumulated_depreciation_amount = get_opening_accumulated(d.against_voucher, d.posting_date)
             else:
                 asset_data.accumulated_depreciation_amount += d.debit
 
+            # Opening accumulated depreciation
             asset_data.opening_accumulated_depreciation = (
                 asset_data.accumulated_depreciation_amount - d.debit
             )
@@ -110,11 +103,10 @@ def get_data(filters):
                     "depreciation_amount": d.debit,
                     "depreciation_date": d.posting_date,
                     "value_after_depreciation": (
-                        flt(row.net_purchase_amount)
+                        flt(row.gross_purchase_amount)
                         - flt(row.accumulated_depreciation_amount)
                     ),
                     "depreciation_entry": d.voucher_no,
-                    "currency": company_currency,   # ✅ important
                 }
             )
 
@@ -123,14 +115,34 @@ def get_data(filters):
     return data
 
 
+def get_opening_accumulated(asset, schedule_date):
+    """Get accumulated depreciation up to the given date."""
+    AssetDepreciationSchedule = DocType("Asset Depreciation Schedule")
+    DepreciationSchedule = DocType("Depreciation Schedule")
+
+    query = (
+        frappe.qb.from_(DepreciationSchedule)
+        .join(AssetDepreciationSchedule)
+        .on(DepreciationSchedule.parent == AssetDepreciationSchedule.name)
+        .select(DepreciationSchedule.accumulated_depreciation_amount)
+        .where(
+            (AssetDepreciationSchedule.asset == asset)
+            & (DepreciationSchedule.parenttype == "Asset Depreciation Schedule")
+            & (DepreciationSchedule.schedule_date == schedule_date)
+        )
+    ).run(as_dict=True)
+
+    return query[0]["accumulated_depreciation_amount"] if query else 0
+
+
 def get_assets_details(assets):
     assets_details = {}
 
+    # Correct v15 field list
     fields = [
         "name as asset",
         "asset_name",
-        "net_purchase_amount",
-        "opening_accumulated_depreciation",
+        "gross_purchase_amount",
         "asset_category",
         "status",
         "depreciation_method",
@@ -167,37 +179,37 @@ def get_columns():
         },
         {
             "label": _("Purchase Amount"),
-            "fieldname": "net_purchase_amount",
+            "fieldname": "gross_purchase_amount",
             "fieldtype": "Currency",
-            "options": "currency",
+            "options": "company:currency",
             "width": 120,
         },
         {
             "label": _("Opening Accumulated Depreciation"),
             "fieldname": "opening_accumulated_depreciation",
             "fieldtype": "Currency",
-            "options": "currency",
-            "width": 140,
+            "options": "company:currency",
+            "width": 160,
         },
         {
             "label": _("Depreciation Amount"),
             "fieldname": "depreciation_amount",
             "fieldtype": "Currency",
-            "options": "currency",
+            "options": "company:currency",
             "width": 140,
         },
         {
             "label": _("Accumulated Depreciation Amount"),
             "fieldname": "accumulated_depreciation_amount",
             "fieldtype": "Currency",
-            "options": "currency",
-            "width": 210,
+            "options": "company:currency",
+            "width": 200,
         },
         {
             "label": _("Value After Depreciation"),
             "fieldname": "value_after_depreciation",
             "fieldtype": "Currency",
-            "options": "currency",
+            "options": "company:currency",
             "width": 180,
         },
         {
@@ -216,10 +228,10 @@ def get_columns():
         },
         {
             "label": _("Cost Center"),
-            "fieldtype": "Link",
             "fieldname": "cost_center",
+            "fieldtype": "Link",
             "options": "Cost Center",
-            "width": 100,
+            "width": 120,
         },
         {
             "label": _("Current Status"),
