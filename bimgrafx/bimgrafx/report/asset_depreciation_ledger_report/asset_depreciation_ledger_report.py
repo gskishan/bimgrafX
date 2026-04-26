@@ -15,6 +15,11 @@ def execute(filters=None):
 def get_data(filters):
     data = []
 
+    # Fetch company currency
+    company_currency = frappe.get_cached_value(
+        "Company", filters.get("company"), "default_currency"
+    )
+
     # Get depreciation accounts
     depreciation_accounts = frappe.db.sql_list(
         """SELECT name FROM tabAccount WHERE IFNULL(account_type, '') = 'Depreciation' """
@@ -107,6 +112,7 @@ def get_data(filters):
                         - flt(row.accumulated_depreciation_amount)
                     ),
                     "depreciation_entry": d.voucher_no,
+                    "currency": company_currency,  # Required for currency columns to show correct symbol
                 }
             )
 
@@ -138,7 +144,6 @@ def get_opening_accumulated(asset, schedule_date):
 def get_assets_details(assets):
     assets_details = {}
 
-    # Correct v15 field list
     fields = [
         "name as asset",
         "asset_name",
@@ -181,35 +186,35 @@ def get_columns():
             "label": _("Purchase Amount"),
             "fieldname": "gross_purchase_amount",
             "fieldtype": "Currency",
-            "options": "company:currency",
+            "options": "currency",
             "width": 120,
         },
         {
             "label": _("Opening Accumulated Depreciation"),
             "fieldname": "opening_accumulated_depreciation",
             "fieldtype": "Currency",
-            "options": "company:currency",
+            "options": "currency",
             "width": 160,
         },
         {
             "label": _("Depreciation Amount"),
             "fieldname": "depreciation_amount",
             "fieldtype": "Currency",
-            "options": "company:currency",
+            "options": "currency",
             "width": 140,
         },
         {
             "label": _("Accumulated Depreciation Amount"),
             "fieldname": "accumulated_depreciation_amount",
             "fieldtype": "Currency",
-            "options": "company:currency",
+            "options": "currency",
             "width": 200,
         },
         {
             "label": _("Value After Depreciation"),
             "fieldname": "value_after_depreciation",
             "fieldtype": "Currency",
-            "options": "company:currency",
+            "options": "currency",
             "width": 180,
         },
         {
