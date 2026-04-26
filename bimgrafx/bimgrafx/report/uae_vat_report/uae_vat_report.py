@@ -44,14 +44,14 @@ def get_columns():
             "fieldtype": "Data",
             "width":     200,
         },
-        # ── NEW: Column 5 – RCM Input (recoverable reverse-charge VAT)
+        # Column 5 – RCM Input (recoverable reverse-charge VAT)
         {
             "fieldname": "rcm_input",
             "label":     _("RCM Input (AED)"),
             "fieldtype": "Data",
             "width":     200,
         },
-        # ── NEW: Column 6 – RCM Output (reverse-charge output VAT due)
+        # Column 6 – RCM Output (reverse-charge output VAT due)
         {
             "fieldname": "rcm_output",
             "label":     _("RCM Output (AED)"),
@@ -67,9 +67,11 @@ def get_columns():
 
 def fmt(value, bold=False, prefix_aed=False):
     """
-    Format a float as [AED]x,xxx.xx
-    bold=True   → wraps in <b> for summary rows (BOX 6, 9, 10)
-    prefix_aed  → adds 'AED' before the number (summary rows only)
+    Format a float as AED x,xxx.xx
+    bold=True       → wraps in <b> for summary rows (BOX 6, 9, 10)
+    prefix_aed=True → adds 'AED ' before the number
+    ALL amount/vat cells now always get 'AED ' prefix via prefix_aed=True
+    at call sites.
     """
     if value is None:
         return ""
@@ -80,8 +82,9 @@ def fmt(value, bold=False, prefix_aed=False):
     else:
         text = formatted
 
+    # Always prepend AED prefix when requested
     if prefix_aed:
-        text = "AED{0}".format(text)
+        text = "AED {0}".format(text)
 
     if bold:
         text = "<b>{0}</b>".format(text)
@@ -106,19 +109,32 @@ def get_data(filters=None):
 
 
 def append_data(data, no, legend, amount_raw, vat_raw,
-                bold=False, prefix_aed=False,
+                bold=False,
                 rcm_input_raw=None, rcm_output_raw=None):
     """
-    Append one row.  rcm_input_raw / rcm_output_raw populate the two new columns.
+    Append one row.
+    - All numeric amount/vat/rcm cells get 'AED ' prefix.
+    - Bold summary rows additionally wrap the text in <b>.
     """
     data.append({
-        "no":         no,
-        "legend":     "<b>{0}</b>".format(legend) if bold and legend else (legend or ""),
-        "amount":     fmt(amount_raw,     bold=bold, prefix_aed=prefix_aed) if amount_raw     is not None else "",
-        "vat_amount": fmt(vat_raw,        bold=bold, prefix_aed=prefix_aed) if vat_raw        is not None else "",
-        # RCM columns — only bold/prefixed on summary rows if caller requests it
-        "rcm_input":  fmt(rcm_input_raw,  bold=bold, prefix_aed=prefix_aed) if rcm_input_raw  is not None else "",
-        "rcm_output": fmt(rcm_output_raw, bold=bold, prefix_aed=prefix_aed) if rcm_output_raw is not None else "",
+        "no":   no,
+        "legend": "<b>{0}</b>".format(legend) if bold and legend else (legend or ""),
+
+        # Amount column — always AED-prefixed; bold on summary rows
+        "amount": fmt(amount_raw, bold=bold, prefix_aed=True)
+                  if amount_raw is not None else "",
+
+        # VAT Amount column — always AED-prefixed; bold on summary rows
+        "vat_amount": fmt(vat_raw, bold=bold, prefix_aed=True)
+                      if vat_raw is not None else "",
+
+        # RCM Input — always AED-prefixed; bold on summary rows
+        "rcm_input": fmt(rcm_input_raw, bold=bold, prefix_aed=True)
+                     if rcm_input_raw is not None else "",
+
+        # RCM Output — always AED-prefixed; bold on summary rows
+        "rcm_output": fmt(rcm_output_raw, bold=bold, prefix_aed=True)
+                      if rcm_output_raw is not None else "",
     })
 
 
@@ -140,11 +156,15 @@ def append_vat_on_sales(data, filters):
         (-1) * tourist_total, (-1) * tourist_tax)
 
     # Row 3 — Reverse charge supplies (sales / output side)
-    rc_total = flt(get_reverse_charge_total(filters))
-    rc_tax   = flt(get_reverse_charge_tax(filters))
+    # FIX: now also populates rcm_input and rcm_output columns
+    rc_total    = flt(get_reverse_charge_total(filters))
+    rc_tax      = flt(get_reverse_charge_tax(filters))
+    rc_rec_tax  = flt(get_reverse_charge_recoverable_tax(filters))
     append_data(data, "3",
         _("Supplies subject to the reverse charge provisions"),
-        rc_total, rc_tax)
+        rc_total, rc_tax,
+        rcm_input_raw=rc_rec_tax,
+        rcm_output_raw=rc_tax)
 
     # Row 4 — Zero rated
     append_data(data, "4", _("Zero rated supplies"),
@@ -155,12 +175,10 @@ def append_vat_on_sales(data, filters):
         flt(get_exempt_total(filters)), 0.0)
 
     # BOX 6 — TOTAL OUTPUT TAX DUE
-    # ── FIX: use actual GL credits (captures credit-note reversals)
-    #    instead of re-deriving 5 % from net amounts.
-    output_vat_gl = flt(get_output_vat_from_gl(filters))
+    output_vat_gl    = flt(get_output_vat_from_gl(filters))
     total_output_vat = output_vat_gl + rc_tax
     append_data(data, "6", _("BOX 6 TOTAL OUTPUT TAX DUE"),
-        None, total_output_vat, bold=True, prefix_aed=True)
+        None, total_output_vat, bold=True)
 
     return emirates, amounts_by_emirate
 
@@ -172,9 +190,6 @@ def standard_rated_expenses_emiratewise(data, filters):
     amounts_by_emirate = {}
 
     for emirate, amount in total_emiratewise:
-        # ── FIX: amount already nets regular invoices + credit notes because
-        #    credit notes have is_return=1 and negative base_net_amount values,
-        #    so SUM() naturally reduces the taxable base.
         net = flt(amount)
         amounts_by_emirate[emirate] = {
             "raw_amount":     net,
@@ -191,8 +206,9 @@ def standard_rated_expenses_emiratewise(data, filters):
             data.append({
                 "no":         box_no,
                 "legend":     legend,
-                "amount":     fmt(net),
-                "vat_amount": fmt(vat),
+                # FIX: AED prefix on emiratewise rows too
+                "amount":     fmt(net, prefix_aed=True),
+                "vat_amount": fmt(vat, prefix_aed=True),
                 "rcm_input":  "",
                 "rcm_output": "",
             })
@@ -226,27 +242,26 @@ def append_vat_on_expenses(data, filters):
         flt(get_standard_rated_expenses_total(filters)), std_tax)
 
     # Box 8 — Reverse charge purchases
-    # ── NEW: also populates rcm_input and rcm_output columns
+    # FIX: rcm_input and rcm_output columns populated; AED prefix via append_data
     append_data(data, "8",
         _("Box 8 Supplies subject to the reverse charge provisions"),
         flt(get_reverse_charge_recoverable_total(filters)), rc_rec_tax,
         rcm_input_raw=rc_rec_tax,
         rcm_output_raw=rc_tax)
 
-    # BOX 9 — TOTAL INPUT TAX (bold, AED prefix)
+    # BOX 9 — TOTAL INPUT TAX (bold)
     total_input_tax = std_tax + rc_rec_tax
     append_data(data, "9", _("BOX 9 TOTAL INPUT TAX"),
-        None, total_input_tax, bold=True, prefix_aed=True)
+        None, total_input_tax, bold=True)
 
     # BOX 10 — NET VAT TO PAY
-    # ── FIX: use GL-based output VAT so credit notes are already included.
     output_vat_gl    = flt(get_output_vat_from_gl(filters))
     total_output_tax = output_vat_gl + rc_tax
     net_vat          = flt(total_output_tax - total_input_tax)
 
-    # ── NEW: BOX 10 row also shows RCM breakdown in the two new columns
+    # BOX 10 row also shows RCM breakdown in the two new columns
     append_data(data, "10", _("BOX 10 NET VAT TO PAY (OR RECLAIM)"),
-        None, net_vat, bold=True, prefix_aed=True,
+        None, net_vat, bold=True,
         rcm_input_raw=rc_rec_tax,
         rcm_output_raw=rc_tax)
 
@@ -279,8 +294,7 @@ def get_total_emiratewise(filters=None, data_filters=None):
     sales invoice lines.
 
     Credit notes (is_return = 1) are NOT excluded — their negative base_net_amount
-    values automatically reduce the taxable base for each emirate, which is the
-    correct VAT-201 treatment.
+    values automatically reduce the taxable base for each emirate.
     """
     f = data_filters if data_filters is not None else filters
     if f is None:
@@ -310,7 +324,7 @@ def get_total_emiratewise(filters=None, data_filters=None):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# OUTPUT VAT FROM GL  (FIX for credit-note-aware Box 6 / Box 10)
+# OUTPUT VAT FROM GL  (credit-note-aware Box 6 / Box 10)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def get_output_vat_from_gl(filters):
@@ -443,6 +457,10 @@ def get_conditions_bare(filters):
 
 # ─────────────────────────────────────────────────────────────────────────────
 # REVERSE CHARGE  (RCM Output = liability; RCM Input = recoverable)
+#
+# FIX: Changed account filter from `tabUAE VAT Account` to LIKE 'RCM ...'
+#      because RCM Input / RCM Output accounts are separate GL accounts
+#      and are NOT listed in tabUAE VAT Account (which covers standard VAT).
 # ─────────────────────────────────────────────────────────────────────────────
 
 def get_reverse_charge_total(filters):
@@ -462,23 +480,20 @@ def get_reverse_charge_total(filters):
 def get_reverse_charge_tax(filters):
     """
     RCM Output — VAT debited (liability) on reverse-charge purchases.
-    Debit entries represent the output-VAT the company owes on behalf of
-    the supplier.
+    Queries 'RCM Output%' accounts directly so credit-note reversals
+    and partial-recovery scenarios are all captured correctly.
     """
     conditions = get_conditions_pi(filters)
     try:
         return flt(frappe.db.sql(
             f"""
-            SELECT SUM(gl.debit)
+            SELECT COALESCE(SUM(gl.debit), 0)
             FROM `tabPurchase Invoice` p
             INNER JOIN `tabGL Entry` gl ON gl.voucher_no = p.name
-            WHERE p.reverse_charge = 'Y'
-              AND p.docstatus = 1
-              AND gl.is_cancelled = 0
-              AND gl.account IN (
-                  SELECT account FROM `tabUAE VAT Account`
-                  WHERE parent = %(company)s
-              )
+            WHERE p.reverse_charge  = 'Y'
+              AND p.docstatus        = 1
+              AND gl.is_cancelled    = 0
+              AND gl.account LIKE 'RCM Output%%'
               {conditions}
             """, filters)[0][0])
     except Exception:
@@ -505,22 +520,20 @@ def get_reverse_charge_recoverable_tax(filters):
     """
     RCM Input — the portion of reverse-charge VAT the company can reclaim
     as input tax (proportional to recoverable_reverse_charge %).
+    Queries 'RCM Input%' accounts directly (not tabUAE VAT Account).
     """
     conditions = get_conditions_pi(filters)
     try:
         return flt(frappe.db.sql(
             f"""
-            SELECT SUM(gl.debit * p.recoverable_reverse_charge / 100)
+            SELECT COALESCE(SUM(gl.debit * p.recoverable_reverse_charge / 100), 0)
             FROM `tabPurchase Invoice` p
             INNER JOIN `tabGL Entry` gl ON gl.voucher_no = p.name
-            WHERE p.reverse_charge = 'Y'
-              AND p.docstatus = 1
+            WHERE p.reverse_charge             = 'Y'
+              AND p.docstatus                  = 1
               AND p.recoverable_reverse_charge > 0
-              AND gl.is_cancelled = 0
-              AND gl.account IN (
-                  SELECT account FROM `tabUAE VAT Account`
-                  WHERE parent = %(company)s
-              )
+              AND gl.is_cancelled              = 0
+              AND gl.account LIKE 'RCM Input%%'
               {conditions}
             """, filters)[0][0])
     except Exception:
