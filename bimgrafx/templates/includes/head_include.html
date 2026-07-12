@@ -5,3 +5,18 @@ j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
 'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
 })(window,document,'script','dataLayer','GTM-PH5PVLS8');</script>
 <!-- End Google Tag Manager -->
+
+<!-- UTM Capture for Lead Source Tracking -->
+<script>
+(function() {
+  var params = new URLSearchParams(window.location.search);
+  var utmFields = ['utm_source', 'utm_medium', 'utm_campaign', 'utm_content'];
+  utmFields.forEach(function(field) {
+    var value = params.get(field);
+    if (value) {
+      sessionStorage.setItem(field, value);
+    }
+  });
+})();
+</script>
+<!-- End UTM Capture -->
