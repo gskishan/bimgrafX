@@ -10,7 +10,7 @@ j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
 <script>
 (function() {
   var params = new URLSearchParams(window.location.search);
-  var utmFields = ['utm_source', 'utm_medium', 'utm_campaign', 'utm_content'];
+  var utmFields = ['custom_utm_source', 'custom_utm_medium', 'custom_utm_campaign', 'custom_utm_content'];
   utmFields.forEach(function(field) {
     var value = params.get(field);
     if (value) {
